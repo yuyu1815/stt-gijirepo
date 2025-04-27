@@ -1,0 +1,30 @@
+{
+	"schedule": {
+	  "月曜日": {
+		"1限": {"name": "授業名1", "teacher": "教師名1", "start_time": "09:30", "end_time": "11:00"},
+		"2限": {"name": "授業名2", "teacher": "教師名2", "start_time": "11:10", "end_time": "12:40"},
+		"3限": {"name": "授業名3", "teacher": "教師名3", "start_time": "13:40", "end_time": "15:10"},
+		"4限": {"name": "授業名4", "teacher": "教師名4", "start_time": "15:20", "end_time": "16:50"}
+	  },
+	  "火曜日": {
+		"1限": {"name": "授業名5", "teacher": "教師名5", "start_time": "09:30", "end_time": "11:00"},
+		"2限": {"name": "授業名6", "teacher": "教師名6", "start_time": "11:10", "end_time": "12:40"},
+		"3限": {"name": "授業名7", "teacher": "教師名7", "start_time": "13:40", "end_time": "15:10"},
+		"4限": {"name": "", "teacher": "", "start_time": "15:20", "end_time": "16:50"}
+	  }
+	},
+  "notion": {
+    "token": "YOUR_NOTION_TOKEN",
+    "url": "YOUR_NOTION_URL"
+  },
+  "gemini": {
+    "api_key": "YOUR_GEMINI_API_KEY",
+    "agent": "models/gemini-2.5-flash-preview-04-17"
+  },
+  "output": {
+    "directory": "output",
+    "txt_directory": "output/txt",
+    "json_directory": "output/json"
+  },
+   "minutes_prompt_file": "PROMPT\\minutes_prompt_detailed.md"
+}
