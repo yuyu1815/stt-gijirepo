@@ -142,3 +142,4 @@ output/
 !requirements.json
 !sample_lecture_note.json
 !sample_lecture_note_with_url.json
+!lang/
