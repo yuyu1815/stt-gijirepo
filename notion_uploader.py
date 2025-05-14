@@ -628,7 +628,7 @@ class NotionUploader:
                                 output_dir = settings["output"]["directory"]
                             # ディレクトリが存在しない場合は作成
                             if not os.path.exists(output_dir):
-                                os.makedirs(output_dir)
+                                os.makedirs(output_dir, exist_ok=True)
                 except Exception as e:
                     print(f"警告: 出力ディレクトリの設定の読み込みに失敗しました: {str(e)}")
 
