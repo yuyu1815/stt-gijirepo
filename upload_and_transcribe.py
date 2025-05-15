@@ -178,7 +178,7 @@ def split_audio(file_path, chunk_duration, start_file_index=0, start_time_second
 
     return chunks
 
-def generate_content_with_retry(client, model_name, contents, max_retries=3):
+def generate_content_with_retry(client, model_name, contents, max_retries=5):
     """
     Gemini APIのgenerate_contentを実行し、応答が"1. None"の場合は再試行する関数
 
@@ -186,7 +186,7 @@ def generate_content_with_retry(client, model_name, contents, max_retries=3):
         client: Gemini APIクライアント
         model_name: 使用するモデル名
         contents: 生成コンテンツのリクエスト内容
-        max_retries: 最大再試行回数（デフォルト: 3）
+        max_retries: 最大再試行回数（デフォルト: 5）
 
     Returns:
         生成されたコンテンツのレスポンス。エラーの場合はNone
@@ -202,12 +202,12 @@ def generate_content_with_retry(client, model_name, contents, max_retries=3):
             if response.text is None:
                 print(f"Geminiからの応答がNoneでした。再試行します（{retries+1}/{max_retries}）")
                 retries += 1
-                time.sleep(1)  # 少し待機してから再試行
+                time.sleep(30)  # 30秒待機してから再試行
                 continue
             elif response.text.strip() == "1. None":
                 print(f"Geminiからの応答が「1. None」でした。再試行します（{retries+1}/{max_retries}）")
                 retries += 1
-                time.sleep(1)  # 少し待機してから再試行
+                time.sleep(30)  # 30秒待機してから再試行
                 continue
 
             return response
@@ -216,7 +216,7 @@ def generate_content_with_retry(client, model_name, contents, max_retries=3):
             retries += 1
             if retries < max_retries:
                 print(f"再試行します（{retries}/{max_retries}）")
-                time.sleep(1)  # 少し待機してから再試行
+                time.sleep(30)  # 30秒待機してから再試行
             else:
                 print(f"最大再試行回数（{max_retries}）に達しました。")
                 return None
