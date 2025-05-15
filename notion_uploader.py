@@ -276,7 +276,7 @@ class NotionUploader:
                     # 長いテキストを分割
                     if len(part) <= MAX_CONTENT_LENGTH:
                         rich_text_list.append({
-                            "type": "text",
+                            "type": "text", 
                             "text": {"content": part},
                             "annotations": {"bold": is_bold}
                         })
@@ -284,7 +284,7 @@ class NotionUploader:
                         for j in range(0, len(part), MAX_CONTENT_LENGTH):
                             chunk = part[j:j+MAX_CONTENT_LENGTH]
                             rich_text_list.append({
-                                "type": "text",
+                                "type": "text", 
                                 "text": {"content": chunk},
                                 "annotations": {"bold": is_bold}
                             })
@@ -811,10 +811,10 @@ if __name__ == "__main__":
     else:
         # 通常のマークダウンファイルとして処理
         result = uploader.upload_lecture_note_from_file(
-            database_id,
-            args.file,
-            args.subject,
-            args.max_blocks,
+            database_id, 
+            args.file, 
+            args.subject, 
+            args.max_blocks, 
             args.create_json
         )
 
