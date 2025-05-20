@@ -603,6 +603,86 @@ def get_media_files_in_folder(folder_path):
 
     return media_files
 
+def count_frames(file_path):
+    """動画のフレーム数をカウントする関数"""
+    try:
+        cap = cv2.VideoCapture(file_path)
+        if not cap.isOpened():
+            print(f"エラー: 動画ファイル '{file_path}' を開けませんでした。")
+            return 0
+
+        # フレーム数を取得
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+
+        return frame_count
+    except Exception as e:
+        print(f"フレーム数のカウント中にエラーが発生しました: {str(e)}")
+        return 0
+
+def split_video(file_path, max_frames=3600):
+    """動画を指定されたフレーム数以下に分割する関数"""
+    try:
+        # 動画の情報を取得
+        cap = cv2.VideoCapture(file_path)
+        if not cap.isOpened():
+            print(f"エラー: 動画ファイル '{file_path}' を開けませんでした。")
+            return []
+
+        # 動画の基本情報を取得
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        # 分割数を計算
+        num_parts = (frame_count + max_frames - 1) // max_frames
+        print(f"動画を {num_parts} 部分に分割します（合計 {frame_count} フレーム）")
+
+        # 一時ディレクトリを作成
+        temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_video")
+        os.makedirs(temp_dir, exist_ok=True)
+
+        # 元のファイル名を取得
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+
+        # 分割ファイルのパスリスト
+        split_files = []
+
+        # 各部分を処理
+        for part in range(num_parts):
+            # 出力ファイルパス
+            output_path = os.path.join(temp_dir, f"{base_name}_part{part+1}.mp4")
+            split_files.append(output_path)
+
+            # 開始フレームと終了フレーム
+            start_frame = part * max_frames
+            end_frame = min((part + 1) * max_frames, frame_count)
+
+            # 新しい動画ファイルを作成
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+            # 開始フレームに移動
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+            # フレームを書き込み
+            for _ in range(end_frame - start_frame):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                out.write(frame)
+
+            out.release()
+            print(f"部分 {part+1}/{num_parts} を {output_path} に保存しました")
+
+        cap.release()
+        return split_files
+
+    except Exception as e:
+        print(f"動画の分割中にエラーが発生しました: {str(e)}")
+        return []
+
 def process_video_with_gemini(file_path, prompt=None):
     """Gemini APIを使用して動画を処理し、内容を分析する関数"""
     if prompt is None:
@@ -621,39 +701,104 @@ def process_video_with_gemini(file_path, prompt=None):
             print("エラー: Gemini APIキーが設定されていません。環境変数GEMINI_API_KEYを設定するか、settings.jsonを更新してください。")
             return None
 
+        # 動画のフレーム数をカウント
+        frame_count = count_frames(file_path)
+        print(f"動画のフレーム数: {frame_count}")
 
-        client = genai.Client(api_key=api_key)
-        start_time = time.time()
-        # 動画ファイルをアップロード
-        print(f"動画ファイルをアップロード中: {file_path}")
-        uploaded_file = client.files.upload(file=file_path)
-        print(f"アップロード完了: {uploaded_file.name}")
+        # フレーム数が3600を超える場合は分割
+        MAX_FRAMES = 3600
+        if frame_count > MAX_FRAMES:
+            print(f"動画のフレーム数が {MAX_FRAMES} を超えるため、分割して処理します。")
+            split_files = split_video(file_path, MAX_FRAMES)
 
-        # 動画の処理が完了するまで待機
-        while uploaded_file.state.name == "PROCESSING":
-            print("動画処理中...")
-            time.sleep(5)
-            uploaded_file = client.files.get(name=uploaded_file.name)
+            if not split_files:
+                print("動画の分割に失敗しました。")
+                return None
 
-        print("動画処理完了")
+            # 各部分を処理して結果を結合
+            combined_analysis = ""
 
-        # 動画の内容を分析
-        print(f"動画内容の分析中...")
-        result = generate_content_with_retry(
-            client, model_name, [uploaded_file, prompt]
-        )
+            for i, part_file in enumerate(split_files):
+                print(f"\n=== 部分 {i+1}/{len(split_files)} の処理を開始します ===")
 
-        if result is None:
-            print("Gemini APIからの応答の取得に失敗しました。")
-            return None
+                client = genai.Client(api_key=api_key)
+                # 動画ファイルをアップロード
+                print(f"動画ファイルをアップロード中: {part_file}")
+                uploaded_file = client.files.upload(file=part_file)
+                print(f"アップロード完了: {uploaded_file.name}")
 
-        print("--- Geminiからの応答テキスト ---")
-        print(result.text)
-        print("--- --- ---")
+                # 動画の処理が完了するまで待機
+                while uploaded_file.state.name == "PROCESSING":
+                    print("動画処理中...")
+                    time.sleep(5)
+                    uploaded_file = client.files.get(name=uploaded_file.name)
 
-        return {
-            "video_analysis": result.text
-        }
+                print("動画処理完了")
+
+                # 動画の内容を分析
+                print(f"動画内容の分析中...")
+                result = generate_content_with_retry(
+                    client, model_name, [uploaded_file, prompt]
+                )
+
+                if result is None:
+                    print(f"部分 {i+1} の処理中にエラーが発生しました。")
+                    continue
+
+                print(f"--- 部分 {i+1} のGeminiからの応答テキスト ---")
+                print(result.text)
+                print("--- --- ---")
+
+                # 結果を結合
+                if combined_analysis:
+                    combined_analysis += f"\n\n=== 部分 {i+1} の分析結果 ===\n\n"
+                combined_analysis += result.text
+
+                # 一時ファイルを削除
+                try:
+                    os.remove(part_file)
+                    print(f"一時ファイル {part_file} を削除しました。")
+                except Exception as e:
+                    print(f"一時ファイルの削除中にエラーが発生しました: {str(e)}")
+
+            print("\n=== すべての部分の処理が完了しました ===")
+            return {
+                "video_analysis": combined_analysis
+            }
+        else:
+            # フレーム数が3600以下の場合は通常通り処理
+            client = genai.Client(api_key=api_key)
+            start_time = time.time()
+            # 動画ファイルをアップロード
+            print(f"動画ファイルをアップロード中: {file_path}")
+            uploaded_file = client.files.upload(file=file_path)
+            print(f"アップロード完了: {uploaded_file.name}")
+
+            # 動画の処理が完了するまで待機
+            while uploaded_file.state.name == "PROCESSING":
+                print("動画処理中...")
+                time.sleep(5)
+                uploaded_file = client.files.get(name=uploaded_file.name)
+
+            print("動画処理完了")
+
+            # 動画の内容を分析
+            print(f"動画内容の分析中...")
+            result = generate_content_with_retry(
+                client, model_name, [uploaded_file, prompt]
+            )
+
+            if result is None:
+                print("Gemini APIからの応答の取得に失敗しました。")
+                return None
+
+            print("--- Geminiからの応答テキスト ---")
+            print(result.text)
+            print("--- --- ---")
+
+            return {
+                "video_analysis": result.text
+            }
 
     except Exception as e:
         print(f"エラー: 動画処理中にエラーが発生しました: {e}")

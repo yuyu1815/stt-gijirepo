@@ -303,6 +303,9 @@ class NotionUploader:
                     code_block_line_count = 0  # 行数カウンタをリセット
                     # 言語の取得（```python など）
                     code_language = line[3:].strip()
+                    # 言語が指定されていない場合や無効な言語の場合は "plain text" を使用
+                    if not code_language or code_language == "```":
+                        code_language = "plain text"
                     i += 1
                     continue
                 else:
