@@ -178,7 +178,7 @@ def split_audio(file_path, chunk_duration, start_file_index=0, start_time_second
 
     return chunks
 
-def generate_content_with_retry(client, model_name, contents, max_retries=3):
+def generate_content_with_retry(client, model_name, contents, max_retries=5):
     """
     Gemini APIのgenerate_contentを実行し、応答が"1. None"の場合は再試行する関数
 
@@ -186,7 +186,7 @@ def generate_content_with_retry(client, model_name, contents, max_retries=3):
         client: Gemini APIクライアント
         model_name: 使用するモデル名
         contents: 生成コンテンツのリクエスト内容
-        max_retries: 最大再試行回数（デフォルト: 3）
+        max_retries: 最大再試行回数（デフォルト: 5）
 
     Returns:
         生成されたコンテンツのレスポンス。エラーの場合はNone
@@ -202,12 +202,12 @@ def generate_content_with_retry(client, model_name, contents, max_retries=3):
             if response.text is None:
                 print(f"Geminiからの応答がNoneでした。再試行します（{retries+1}/{max_retries}）")
                 retries += 1
-                time.sleep(1)  # 少し待機してから再試行
+                time.sleep(30)  # 30秒待機してから再試行
                 continue
             elif response.text.strip() == "1. None":
                 print(f"Geminiからの応答が「1. None」でした。再試行します（{retries+1}/{max_retries}）")
                 retries += 1
-                time.sleep(1)  # 少し待機してから再試行
+                time.sleep(30)  # 30秒待機してから再試行
                 continue
 
             return response
@@ -216,7 +216,7 @@ def generate_content_with_retry(client, model_name, contents, max_retries=3):
             retries += 1
             if retries < max_retries:
                 print(f"再試行します（{retries}/{max_retries}）")
-                time.sleep(1)  # 少し待機してから再試行
+                time.sleep(30)  # 30秒待機してから再試行
             else:
                 print(f"最大再試行回数（{max_retries}）に達しました。")
                 return None
@@ -485,26 +485,22 @@ def combine_transcriptions(transcriptions, chunk_times=None):
 
     この関数は、複数のチャンクに分割された音声ファイルの文字起こし結果を1つに結合します。
     Gemini APIの応答には'segments'キーが含まれていない場合があるため、存在チェックを行います。
-    また、ハルシネーション情報も結合結果に追加します。
 
     Args:
         transcriptions: 文字起こし結果のリスト。各要素は辞書で、'transcription'キーを含む。
                        'segments'キーが含まれている場合は、タイムスタンプ情報も結合されます。
-                       'has_hallucination'キーが含まれている場合は、ハルシネーション情報も結合されます。
         chunk_times: チャンクごとの実際の開始時間と終了時間のリスト [(start_time, end_time), ...]
 
     Returns:
         dict: 結合された文字起こし結果。'transcription'キーと'segments'キーを含む。
               'segments'キーは、元の文字起こし結果に'segments'キーが含まれていない場合は空のリストになります。
-              'hallucination_info'キーには、チャンクごとのハルシネーション情報が含まれます。
     """
     if not transcriptions:
         return None
 
     combined = {
         'transcription': '',
-        'segments': [],
-        'hallucination_info': []  # チャンクごとのハルシネーション情報
+        'segments': []
     }
 
     # セグメントの時間オフセットを管理
@@ -519,18 +515,6 @@ def combine_transcriptions(transcriptions, chunk_times=None):
             combined['transcription'] += ' ' + trans['transcription']
         else:
             combined['transcription'] = trans['transcription']
-
-        # ハルシネーション情報を追加
-        hallucination_info = {
-            'chunk_index': i,
-            'has_hallucination': trans.get('has_hallucination', False)
-        }
-
-        # ハルシネーションチェック結果があれば追加
-        if 'hallucination_check' in trans:
-            hallucination_info['hallucination_check'] = trans['hallucination_check']
-
-        combined['hallucination_info'].append(hallucination_info)
 
         # チャンクの実際の開始時間が指定されている場合は、それを使用
         if chunk_times and i < len(chunk_times):
@@ -619,6 +603,86 @@ def get_media_files_in_folder(folder_path):
 
     return media_files
 
+def count_frames(file_path):
+    """動画のフレーム数をカウントする関数"""
+    try:
+        cap = cv2.VideoCapture(file_path)
+        if not cap.isOpened():
+            print(f"エラー: 動画ファイル '{file_path}' を開けませんでした。")
+            return 0
+
+        # フレーム数を取得
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+
+        return frame_count
+    except Exception as e:
+        print(f"フレーム数のカウント中にエラーが発生しました: {str(e)}")
+        return 0
+
+def split_video(file_path, max_frames=3600):
+    """動画を指定されたフレーム数以下に分割する関数"""
+    try:
+        # 動画の情報を取得
+        cap = cv2.VideoCapture(file_path)
+        if not cap.isOpened():
+            print(f"エラー: 動画ファイル '{file_path}' を開けませんでした。")
+            return []
+
+        # 動画の基本情報を取得
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        # 分割数を計算
+        num_parts = (frame_count + max_frames - 1) // max_frames
+        print(f"動画を {num_parts} 部分に分割します（合計 {frame_count} フレーム）")
+
+        # 一時ディレクトリを作成
+        temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_video")
+        os.makedirs(temp_dir, exist_ok=True)
+
+        # 元のファイル名を取得
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+
+        # 分割ファイルのパスリスト
+        split_files = []
+
+        # 各部分を処理
+        for part in range(num_parts):
+            # 出力ファイルパス
+            output_path = os.path.join(temp_dir, f"{base_name}_part{part+1}.mp4")
+            split_files.append(output_path)
+
+            # 開始フレームと終了フレーム
+            start_frame = part * max_frames
+            end_frame = min((part + 1) * max_frames, frame_count)
+
+            # 新しい動画ファイルを作成
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+            # 開始フレームに移動
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+            # フレームを書き込み
+            for _ in range(end_frame - start_frame):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                out.write(frame)
+
+            out.release()
+            print(f"部分 {part+1}/{num_parts} を {output_path} に保存しました")
+
+        cap.release()
+        return split_files
+
+    except Exception as e:
+        print(f"動画の分割中にエラーが発生しました: {str(e)}")
+        return []
+
 def process_video_with_gemini(file_path, prompt=None):
     """Gemini APIを使用して動画を処理し、内容を分析する関数"""
     if prompt is None:
@@ -637,39 +701,104 @@ def process_video_with_gemini(file_path, prompt=None):
             print("エラー: Gemini APIキーが設定されていません。環境変数GEMINI_API_KEYを設定するか、settings.jsonを更新してください。")
             return None
 
+        # 動画のフレーム数をカウント
+        frame_count = count_frames(file_path)
+        print(f"動画のフレーム数: {frame_count}")
 
-        client = genai.Client(api_key=api_key)
-        start_time = time.time()
-        # 動画ファイルをアップロード
-        print(f"動画ファイルをアップロード中: {file_path}")
-        uploaded_file = client.files.upload(file=file_path)
-        print(f"アップロード完了: {uploaded_file.name}")
+        # フレーム数が3600を超える場合は分割
+        MAX_FRAMES = 3600
+        if frame_count > MAX_FRAMES:
+            print(f"動画のフレーム数が {MAX_FRAMES} を超えるため、分割して処理します。")
+            split_files = split_video(file_path, MAX_FRAMES)
 
-        # 動画の処理が完了するまで待機
-        while uploaded_file.state.name == "PROCESSING":
-            print("動画処理中...")
-            time.sleep(5)
-            uploaded_file = client.files.get(name=uploaded_file.name)
+            if not split_files:
+                print("動画の分割に失敗しました。")
+                return None
 
-        print("動画処理完了")
+            # 各部分を処理して結果を結合
+            combined_analysis = ""
 
-        # 動画の内容を分析
-        print(f"動画内容の分析中...")
-        result = generate_content_with_retry(
-            client, model_name, [uploaded_file, prompt]
-        )
+            for i, part_file in enumerate(split_files):
+                print(f"\n=== 部分 {i+1}/{len(split_files)} の処理を開始します ===")
 
-        if result is None:
-            print("Gemini APIからの応答の取得に失敗しました。")
-            return None
+                client = genai.Client(api_key=api_key)
+                # 動画ファイルをアップロード
+                print(f"動画ファイルをアップロード中: {part_file}")
+                uploaded_file = client.files.upload(file=part_file)
+                print(f"アップロード完了: {uploaded_file.name}")
 
-        print("--- Geminiからの応答テキスト ---")
-        print(result.text)
-        print("--- --- ---")
+                # 動画の処理が完了するまで待機
+                while uploaded_file.state.name == "PROCESSING":
+                    print("動画処理中...")
+                    time.sleep(5)
+                    uploaded_file = client.files.get(name=uploaded_file.name)
 
-        return {
-            "video_analysis": result.text
-        }
+                print("動画処理完了")
+
+                # 動画の内容を分析
+                print(f"動画内容の分析中...")
+                result = generate_content_with_retry(
+                    client, model_name, [uploaded_file, prompt]
+                )
+
+                if result is None:
+                    print(f"部分 {i+1} の処理中にエラーが発生しました。")
+                    continue
+
+                print(f"--- 部分 {i+1} のGeminiからの応答テキスト ---")
+                print(result.text)
+                print("--- --- ---")
+
+                # 結果を結合
+                if combined_analysis:
+                    combined_analysis += f"\n\n=== 部分 {i+1} の分析結果 ===\n\n"
+                combined_analysis += result.text
+
+                # 一時ファイルを削除
+                try:
+                    os.remove(part_file)
+                    print(f"一時ファイル {part_file} を削除しました。")
+                except Exception as e:
+                    print(f"一時ファイルの削除中にエラーが発生しました: {str(e)}")
+
+            print("\n=== すべての部分の処理が完了しました ===")
+            return {
+                "video_analysis": combined_analysis
+            }
+        else:
+            # フレーム数が3600以下の場合は通常通り処理
+            client = genai.Client(api_key=api_key)
+            start_time = time.time()
+            # 動画ファイルをアップロード
+            print(f"動画ファイルをアップロード中: {file_path}")
+            uploaded_file = client.files.upload(file=file_path)
+            print(f"アップロード完了: {uploaded_file.name}")
+
+            # 動画の処理が完了するまで待機
+            while uploaded_file.state.name == "PROCESSING":
+                print("動画処理中...")
+                time.sleep(5)
+                uploaded_file = client.files.get(name=uploaded_file.name)
+
+            print("動画処理完了")
+
+            # 動画の内容を分析
+            print(f"動画内容の分析中...")
+            result = generate_content_with_retry(
+                client, model_name, [uploaded_file, prompt]
+            )
+
+            if result is None:
+                print("Gemini APIからの応答の取得に失敗しました。")
+                return None
+
+            print("--- Geminiからの応答テキスト ---")
+            print(result.text)
+            print("--- --- ---")
+
+            return {
+                "video_analysis": result.text
+            }
 
     except Exception as e:
         print(f"エラー: 動画処理中にエラーが発生しました: {e}")
@@ -1003,69 +1132,14 @@ def main():
                         def process_chunk(index, chunk_path):
                             try:
                                 print(f"チャンク {index+1}/{len(chunk_paths)} の文字起こしを開始します")
-
-                                # 最大再試行回数
-                                chunk_max_retries = 3
-                                chunk_retry_count = 0
-                                chunk_has_hallucination = True
-
-                                # ハルシネーションがなくなるか、最大再試行回数に達するまで繰り返す
-                                while chunk_has_hallucination and chunk_retry_count <= chunk_max_retries:
-                                    if chunk_retry_count > 0:
-                                        print(f"チャンク {index+1}/{len(chunk_paths)} でハルシネーションが検出されたため、再試行します（{chunk_retry_count}/{chunk_max_retries}）")
-
-                                    # 文字起こし
-                                    if use_server:
-                                        trans = transcribe_audio(chunk_path, url)
-                                    else:
-                                        trans = transcribe_audio_with_gemini(chunk_path)
-
-                                    if not trans:
-                                        print(f"チャンク {index+1}/{len(chunk_paths)} の文字起こしに失敗しました。")
-                                        return index, None
-
-                                    # ハルシネーションチェック（サーバー使用時はスキップ）
-                                    if not use_server:
-                                        print(f"チャンク {index+1}/{len(chunk_paths)} のハルシネーションチェックを実行しています...")
-                                        hallucination_check = check_hallucination_with_gemini(
-                                            chunk_path, 
-                                            trans['transcription']
-                                        )
-
-                                        if hallucination_check:
-                                            chunk_has_hallucination = hallucination_check['has_hallucination']
-
-                                            if chunk_has_hallucination:
-                                                print(f"チャンク {index+1}/{len(chunk_paths)} でハルシネーションが検出されました。")
-                                                if chunk_retry_count >= chunk_max_retries:
-                                                    print(f"チャンク {index+1}/{len(chunk_paths)} の最大再試行回数（{chunk_max_retries}）に達しました。ハルシネーションが残っていますが処理を続行します。")
-                                                    # ハルシネーション情報を追加
-                                                    trans['has_hallucination'] = True
-                                                    trans['hallucination_check'] = hallucination_check['hallucination_check']
-                                                    break
-                                            else:
-                                                print(f"チャンク {index+1}/{len(chunk_paths)} でハルシネーションは検出されませんでした。")
-                                                # ハルシネーション情報を追加
-                                                trans['has_hallucination'] = False
-                                                trans['hallucination_check'] = hallucination_check['hallucination_check']
-                                                break
-                                        else:
-                                            print(f"チャンク {index+1}/{len(chunk_paths)} のハルシネーションチェックに失敗しました。ハルシネーションなしとして処理を続行します。")
-                                            chunk_has_hallucination = False
-                                            # ハルシネーション情報を追加
-                                            trans['has_hallucination'] = False
-                                            break
-                                    else:
-                                        # サーバー使用時はハルシネーションチェックをスキップ
-                                        chunk_has_hallucination = False
-                                        break
-
-                                    chunk_retry_count += 1
-
-                                print(f"チャンク {index+1}/{len(chunk_paths)} の処理が完了しました")
+                                if use_server:
+                                    trans = transcribe_audio(chunk_path, url)
+                                else:
+                                    trans = transcribe_audio_with_gemini(chunk_path)
+                                print(f"チャンク {index+1}/{len(chunk_paths)} の文字起こしが完了しました")
                                 return index, trans
                             except Exception as e:
-                                print(f"チャンク {index+1}/{len(chunk_paths)} の処理中にエラーが発生しました: {e}")
+                                print(f"チャンク {index+1}/{len(chunk_paths)} の文字起こし中にエラーが発生しました: {e}")
                                 return index, None
 
                         # ThreadPoolExecutorを使用して並列処理
@@ -1093,32 +1167,42 @@ def main():
                         combined_transcription = combine_transcriptions(transcriptions, chunk_times)
 
                         if not combined_transcription:
-                            print("文字起こしに失敗しました。処理を中止します。")
+                            print("文字起こしに失敗しました。再試行を中止します。")
                             break
 
                         # 文字起こし結果を表示
                         print("\n=== 文字起こし結果 ===")
                         print(combined_transcription['transcription'])
 
-                        # チャンクごとのハルシネーションチェック結果を表示
-                        if not use_server:
-                            print("\n=== チャンクごとのハルシネーションチェック結果 ===")
-                            chunks_with_hallucination = 0
-                            for i, trans in enumerate(transcriptions):
-                                if trans and 'has_hallucination' in trans:
-                                    status = "あり" if trans['has_hallucination'] else "なし"
-                                    print(f"チャンク {i+1}/{len(transcriptions)}: ハルシネーション {status}")
-                                    if trans['has_hallucination']:
-                                        chunks_with_hallucination += 1
+                        # ハルシネーションチェックを実行
+                        print("\nハルシネーションチェックを実行しています...")
+                        hallucination_check = None
+                        if not use_server:  # Gemini APIを使用している場合のみ
+                            hallucination_check = check_hallucination_with_gemini(
+                                audio_file_path, 
+                                combined_transcription['transcription']
+                            )
 
-                            if chunks_with_hallucination > 0:
-                                print(f"\n警告: {chunks_with_hallucination}個のチャンクでハルシネーションが検出されましたが、個別に再生成を試みました。")
+                        if hallucination_check:
+                            print("\n=== ハルシネーションチェック結果 ===")
+                            print(hallucination_check['hallucination_check'])
+
+                            has_hallucination = hallucination_check['has_hallucination']
+
+                            if has_hallucination:
+                                print("\n警告: 文字起こしにハルシネーション（幻聴）が検出されました。")
+                                if retry_count < max_retries:
+                                    print(f"再度文字起こしを実行します。")
+                                else:
+                                    print(f"最大再試行回数（{max_retries}）に達しました。ハルシネーションが残っていますが処理を続行します。")
                             else:
-                                print("\nすべてのチャンクでハルシネーションは検出されませんでした。")
+                                print("\nハルシネーション（幻聴）は検出されませんでした。")
+                        else:
+                            print("ハルシネーションチェックに失敗しました。エラーが発生したため、ハルシネーションなしとして処理を続行します。")
+                            # チェックに失敗した場合はループを抜ける
+                            has_hallucination = False
 
-                        # 全体のハルシネーションチェックは行わず、処理を続行
-                        has_hallucination = False
-                        break
+                        retry_count += 1
                 else:
                     print("音声が40分以下のため、分割せずに処理します。")
 
@@ -1135,59 +1219,44 @@ def main():
                         # ファイル全体を文字起こし
                         if use_server:
                             combined_transcription = transcribe_audio(audio_file_path, url)
-                            # サーバー使用時はハルシネーションチェックをスキップ
-                            has_hallucination = False
                         else:
-                            # 文字起こし
-                            trans = transcribe_audio_with_gemini(audio_file_path)
-
-                            if not trans:
-                                print("文字起こしに失敗しました。処理を中止します。")
-                                break
-
-                            # 文字起こし結果を表示
-                            print("\n=== 文字起こし結果 ===")
-                            print(trans['transcription'])
-
-                            # ハルシネーションチェックを実行
-                            print("\nハルシネーションチェックを実行しています...")
-                            hallucination_check = check_hallucination_with_gemini(
-                                audio_file_path, 
-                                trans['transcription']
-                            )
-
-                            if hallucination_check:
-                                print("\n=== ハルシネーションチェック結果 ===")
-                                print(hallucination_check['hallucination_check'])
-
-                                has_hallucination = hallucination_check['has_hallucination']
-
-                                if has_hallucination:
-                                    print("\n警告: 文字起こしにハルシネーション（幻聴）が検出されました。")
-                                    if retry_count >= max_retries:
-                                        print(f"最大再試行回数（{max_retries}）に達しました。ハルシネーションが残っていますが処理を続行します。")
-                                        # ハルシネーション情報を追加
-                                        trans['has_hallucination'] = True
-                                        trans['hallucination_check'] = hallucination_check['hallucination_check']
-                                        has_hallucination = False  # 処理を続行するためにループを抜ける
-                                else:
-                                    print("\nハルシネーション（幻聴）は検出されませんでした。")
-                                    # ハルシネーション情報を追加
-                                    trans['has_hallucination'] = False
-                                    trans['hallucination_check'] = hallucination_check['hallucination_check']
-                            else:
-                                print("ハルシネーションチェックに失敗しました。エラーが発生したため、ハルシネーションなしとして処理を続行します。")
-                                # チェックに失敗した場合はループを抜ける
-                                has_hallucination = False
-                                # ハルシネーション情報を追加
-                                trans['has_hallucination'] = False
-
-                            # 結果を設定
-                            combined_transcription = trans
+                            combined_transcription = transcribe_audio_with_gemini(audio_file_path)
 
                         if not combined_transcription:
-                            print("文字起こしに失敗しました。処理を中止します。")
+                            print("文字起こしに失敗しました。再試行を中止します。")
                             break
+
+                        # 文字起こし結果を表示
+                        print("\n=== 文字起こし結果 ===")
+                        print(combined_transcription['transcription'])
+
+                        # ハルシネーションチェックを実行
+                        print("\nハルシネーションチェックを実行しています...")
+                        hallucination_check = None
+                        if not use_server:  # Gemini APIを使用している場合のみ
+                            hallucination_check = check_hallucination_with_gemini(
+                                audio_file_path, 
+                                combined_transcription['transcription']
+                            )
+
+                        if hallucination_check:
+                            print("\n=== ハルシネーションチェック結果 ===")
+                            print(hallucination_check['hallucination_check'])
+
+                            has_hallucination = hallucination_check['has_hallucination']
+
+                            if has_hallucination:
+                                print("\n警告: 文字起こしにハルシネーション（幻聴）が検出されました。")
+                                if retry_count < max_retries:
+                                    print(f"再度文字起こしを実行します。")
+                                else:
+                                    print(f"最大再試行回数（{max_retries}）に達しました。ハルシネーションが残っていますが処理を続行します。")
+                            else:
+                                print("\nハルシネーション（幻聴）は検出されませんでした。")
+                        else:
+                            print("ハルシネーションチェックに失敗しました。エラーが発生したため、ハルシネーションなしとして処理を続行します。")
+                            # チェックに失敗した場合はループを抜ける
+                            has_hallucination = False
 
                         retry_count += 1
 
