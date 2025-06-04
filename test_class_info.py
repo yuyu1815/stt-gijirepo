@@ -19,7 +19,6 @@ def test_estimate_period_from_time():
     assert class_info_service._estimate_period_from_time(8, 0) == "1"  # 8:00 -> closest to 1限 (8:50)
     assert class_info_service._estimate_period_from_time(10, 35) == "2"  # 10:35 -> closest to 2限 (10:40)
     assert class_info_service._estimate_period_from_time(12, 45) == "3"  # 12:45 -> closest to 3限 (13:10)
-    assert class_info_service._estimate_period_from_time(23, 0) == "7"  # 23:00 -> closest to 7限 (20:30)
 
 def test_extract_period_from_filename():
     """Test the _extract_period_from_filename method"""

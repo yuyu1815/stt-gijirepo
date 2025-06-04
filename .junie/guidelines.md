@@ -44,21 +44,7 @@ PEP 8の詳細については、公式ドキュメントを参照してくださ
     * 必要であれば、詳細な説明を続けます。
     * 引数 (`Args:`)、戻り値 (`Returns:`), 発生する例外 (`Raises:`) について記述します。
 
-```python
-def calculate_something(arg1: int, arg2: int) -> int:
-    """
-    This function calculates something based on the two arguments.
+## 5.やってはいけないこと
 
-    Args:
-        arg1: The first integer argument.
-        arg2: The second integer argument.
-
-    Returns:
-        The result of the calculation.
-
-    Raises:
-        ValueError: If arg1 or arg2 is negative.
-    """
-    if arg1 < 0 or arg2 < 0:
-        raise ValueError("Arguments cannot be negative")
-    return arg1 + arg2 # Example calculation
+テストケースのみでしか動かないようなコード
+汎用性が極端に少ないコード
