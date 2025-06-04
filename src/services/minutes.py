@@ -31,6 +31,10 @@ class MinutesGeneratorService:
         self.prompt_path = config_manager.get_prompt_path("minutes_detailed")
         self.summary_prompt_path = config_manager.get_prompt_path("summary")
 
+        # レート制限のための変数
+        self.requests_per_minute = config_manager.get("minutes.requests_per_minute", 5)  # デフォルトは1分あたり5リクエスト
+        self.request_timestamps = []  # リクエストのタイムスタンプを記録するリスト
+
     def generate_minutes(self, transcription_result: TranscriptionResult, 
                         media_file: MediaFile, 
                         extracted_images: Optional[List[ExtractedImage]] = None,
@@ -196,24 +200,55 @@ class MinutesGeneratorService:
             if video_analysis_result.get('key_points'):
                 prompt += f"\n\n重要ポイント:\n" + "\n".join([f"- {point}" for point in video_analysis_result.get('key_points', [])])
 
-        # ここでは実際のGemini API呼び出しの代わりにモック実装
-        # 実際の実装では、Gemini APIクライアントを使用して文字起こしテキストを送信し、議事録内容を取得する
+        # Gemini APIの設定
+        from google import genai
+        client = genai.Client(api_key=self.api_key)
+        model_name = config_manager.get("gemini.model", "gemini-2.0-flash")
 
-        # モック実装（実際の実装では削除）
         logger.info(f"Gemini APIで議事録内容を生成します: {transcription_result.source_file}")
 
         # 再試行メカニズム
         retry_count = 0
         while retry_count <= self.max_retries:
             try:
-                # ここに実際のAPI呼び出しコードを実装
-                # 例: response = gemini_client.generate_minutes(transcription_text, prompt)
+                # レート制限をチェック
+                self._check_rate_limit()
 
-                # モック応答（実際の実装では削除）
-                mock_response = self._generate_mock_minutes(transcription_result, extracted_images, video_analysis_result)
+                # リクエストのタイムスタンプを記録
+                self.request_timestamps.append(time.time())
+
+                # コンテンツの準備
+                contents = [
+                    prompt,
+                    f"以下は文字起こし結果です：\n\n{transcription_text}"
+                ]
+
+                # 抽出された画像がある場合は追加
+                if extracted_images and len(extracted_images) > 0:
+                    image_descriptions = []
+                    for img in extracted_images:
+                        image_descriptions.append(f"- 画像: {img.file_path.name} (タイムスタンプ: {self._format_time(img.timestamp)})")
+                        # 画像ファイルをアップロード
+                        try:
+                            image_file = client.files.upload(file=str(img.file_path))
+                            contents.append(image_file)
+                        except Exception as e:
+                            logger.warning(f"画像のアップロードに失敗しました: {img.file_path} - {e}")
+
+                    if image_descriptions:
+                        contents.append(f"以下は抽出された画像です：\n\n" + "\n".join(image_descriptions))
+
+                # Gemini APIを使用して議事録内容を生成
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents
+                )
+
+                # 応答から議事録内容を取得
+                minutes_content = response.text
 
                 # 成功した場合は結果を返す
-                return mock_response
+                return minutes_content
             except Exception as e:
                 retry_count += 1
 
@@ -627,6 +662,31 @@ class MinutesGeneratorService:
 
         return "\n".join(lines)
 
+    def _check_rate_limit(self):
+        """
+        レート制限をチェックし、必要に応じて待機する
+
+        直近1分間のリクエスト数をチェックし、設定された上限を超えている場合は
+        制限内に収まるまで待機します。
+        """
+        current_time = time.time()
+
+        # 1分（60秒）以上前のタイムスタンプを削除
+        self.request_timestamps = [ts for ts in self.request_timestamps if current_time - ts < 60]
+
+        # 現在のリクエスト数が上限に達している場合
+        if len(self.request_timestamps) >= self.requests_per_minute:
+            # 最も古いリクエストから60秒経過するまで待機
+            oldest_timestamp = self.request_timestamps[0]
+            wait_time = 60 - (current_time - oldest_timestamp)
+
+            if wait_time > 0:
+                logger.info(f"レート制限に達しました。{wait_time:.2f}秒待機します（1分あたり{self.requests_per_minute}リクエスト）")
+                time.sleep(wait_time)
+
+                # 待機後に再度チェック（再帰呼び出し）
+                self._check_rate_limit()
+
     def _format_time(self, seconds: float) -> str:
         """
         秒を時間文字列にフォーマット
@@ -704,24 +764,40 @@ class MinutesGeneratorService:
         # 文字起こしテキストを取得
         transcription_text = transcription_result.full_text
 
-        # ここでは実際のGemini API呼び出しの代わりにモック実装
-        # 実際の実装では、Gemini APIクライアントを使用して文字起こしテキストを送信し、要約を取得する
+        # Gemini APIの設定
+        from google import genai
+        client = genai.Client(api_key=self.api_key)
+        model_name = config_manager.get("gemini.model", "gemini-2.0-flash")
 
-        # モック実装（実際の実装では削除）
         logger.info(f"Gemini APIで要約を生成します: {transcription_result.source_file}")
 
         # 再試行メカニズム
         retry_count = 0
         while retry_count <= self.max_retries:
             try:
-                # ここに実際のAPI呼び出しコードを実装
-                # 例: response = gemini_client.generate_summary(transcription_text, prompt)
+                # レート制限をチェック
+                self._check_rate_limit()
 
-                # モック応答（実際の実装では削除）
-                mock_response = f"これは{transcription_result.source_file.stem}に関する要約です。これはモックの要約です。実際の実装では、Gemini APIを使用して文字起こし結果から要約を生成します。"
+                # リクエストのタイムスタンプを記録
+                self.request_timestamps.append(time.time())
+
+                # コンテンツの準備
+                contents = [
+                    prompt,
+                    f"以下は文字起こし結果です：\n\n{transcription_text}"
+                ]
+
+                # Gemini APIを使用して要約を生成
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents
+                )
+
+                # 応答から要約を取得
+                summary = response.text
 
                 # 成功した場合は結果を返す
-                return mock_response
+                return summary
             except Exception as e:
                 retry_count += 1
 

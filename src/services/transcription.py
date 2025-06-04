@@ -163,6 +163,11 @@ class TranscriptionService:
         # Gemini APIで文字起こし
         transcription = self._transcribe_with_gemini(file_path, prompt) # This mock doesn't know about original_media_file, if real API needs it, adapt here
 
+        # transcriptionがNoneの場合、空の文字列を使用する
+        if transcription is None:
+            logger.warning(f"文字起こしの結果がNoneでした。空の文字列を使用します: {file_path}")
+            transcription = ""
+
         # 文字起こし結果をパース
         segments = self._parse_transcription(transcription, original_media_file=original_media_file) # Modified
 
@@ -207,7 +212,7 @@ class TranscriptionService:
                 # 待機後に再度チェック（再帰呼び出し）
                 self._check_rate_limit()
 
-    def _transcribe_with_gemini(self, file_path: Path, prompt: str) -> str:
+    def _transcribe_with_gemini(self, file_path: Path, prompt: str) -> str | None:
         """
         Gemini APIを使用して文字起こし
 
@@ -240,12 +245,17 @@ class TranscriptionService:
                 self.request_timestamps.append(time.time())
 
                 # 音声ファイルをアップロード
-                myfile = client.files.upload(file=str(file_path))
+                my_file = client.files.upload(file=str(file_path))
+
+                while my_file.state.name == "PROCESSING":
+                    print("ビデオを処理中...",end="\r")
+                    time.sleep(5)
+                    my_file = client.files.get(name=my_file.name)
 
                 # Gemini APIを使用して文字起こし
                 response = client.models.generate_content(
                     model=model_name,
-                    contents=[prompt, myfile]
+                    contents=[prompt, my_file]
                 )
 
                 # 応答から文字起こしテキストを取得
@@ -256,15 +266,16 @@ class TranscriptionService:
             except Exception as e:
                 retry_count += 1
 
-                # 最大再試行回数に達した場合はエラーを発生
+                # 最大再試行回数に達した場合はエラーをログに記録し、Noneを返す
                 if retry_count > self.max_retries:
                     logger.error(f"文字起こしの最大再試行回数に達しました: {e}")
-                    raise
+                    return None
 
                 # 再試行前に待機（指数バックオフ）
                 delay = min(self.retry_delay * (2 ** (retry_count - 1)), self.max_retry_delay)
                 logger.warning(f"文字起こしに失敗しました。{delay}秒後に再試行します ({retry_count}/{self.max_retries}): {e}")
                 time.sleep(delay)
+        return None
 
     def _parse_transcription(self, transcription: str, original_media_file: Optional[MediaFile] = None) -> List[TranscriptionSegment]:
         """
