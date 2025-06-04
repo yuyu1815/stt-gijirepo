@@ -144,6 +144,32 @@ class ConfigManager:
             with open(logging_path, "w", encoding="utf-8") as f:
                 json.dump(self.settings["logging"], f, indent=4, ensure_ascii=False)
 
+    def _load_api_key_from_file(self, service: str) -> Optional[str]:
+        """
+        APIキーをファイルから読み込む
+
+        Args:
+            service: サービス名（"gemini", "notion"など）
+
+        Returns:
+            APIキー
+        """
+        api_key_file = self.get(f"{service}.api_key_file")
+        if not api_key_file:
+            return None
+
+        api_key_path = Path(api_key_file)
+        if not api_key_path.exists():
+            return None
+
+        try:
+            with open(api_key_path, "r", encoding="utf-8") as f:
+                api_keys = json.load(f)
+                return api_keys.get(service, {}).get("api_key")
+        except Exception as e:
+            print(f"APIキーファイルの読み込みに失敗しました: {e}")
+            return None
+
     def get_api_key(self, service: str) -> Optional[str]:
         """
         APIキーを取得
@@ -154,11 +180,14 @@ class ConfigManager:
         Returns:
             APIキー
         """
+        # 優先順位: 環境変数 > APIキーファイル > 設定ファイル内のAPIキー
         if service == "gemini":
-            # 環境変数から設定された場合は gemini_api_key、settings.jsonから読み込まれた場合は gemini.api_key
-            return self.get("gemini_api_key") or self.get("gemini.api_key")
+            return (self.get("gemini_api_key") or 
+                    self._load_api_key_from_file(service) or 
+                    self.get("gemini.api_key"))
         elif service == "notion":
-            return self.get("notion.api_key")
+            return (self.get("notion.api_key") or 
+                    self._load_api_key_from_file(service))
         return None
 
     def get_output_dir(self, subdir: Optional[str] = None) -> Path:
