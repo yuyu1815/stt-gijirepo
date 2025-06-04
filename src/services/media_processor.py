@@ -155,46 +155,48 @@ class MediaProcessorService:
 
     def extract_images_from_video(self, video_file: MediaFile, 
                                  interval: int = 60, quality: int = 3) -> List[ExtractedImage]:
-        """
-        動画から一定間隔で画像を抽出
+        logger.warning(f"Interval-based image extraction (extract_images_from_video) is disabled. Called for {video_file.file_path}")
+        return []
+        # """
+        # 動画から一定間隔で画像を抽出
         
-        Args:
-            video_file: 動画ファイル
-            interval: 抽出間隔（秒）
-            quality: 画像品質（1-5、高いほど高品質）
-            
-        Returns:
-            抽出した画像のリスト
-        """
-        if not video_file.is_video:
-            logger.warning(f"動画ファイルではありません: {video_file.file_path}")
-            return []
-            
-        # 出力ディレクトリを生成
-        output_dir = storage_manager.get_output_dir("images") / video_file.file_path.stem
-        if not output_dir.exists():
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
-        # 画像を抽出
-        extracted = ffmpeg_wrapper.extract_images_at_intervals(
-            video_file.file_path, output_dir, interval, quality
-        )
+        # Args:
+        #     video_file: 動画ファイル
+        #     interval: 抽出間隔（秒）
+        #     quality: 画像品質（1-5、高いほど高品質）
+
+        # Returns:
+        #     抽出した画像のリスト
+        # """
+        # if not video_file.is_video:
+        #     logger.warning(f"動画ファイルではありません: {video_file.file_path}")
+        #     return []
+
+        # # 出力ディレクトリを生成
+        # output_dir = storage_manager.get_output_dir("images") / video_file.file_path.stem
+        # if not output_dir.exists():
+        #     output_dir.mkdir(parents=True, exist_ok=True)
+
+        # # 画像を抽出
+        # extracted = ffmpeg_wrapper.extract_images_at_intervals(
+        #     video_file.file_path, output_dir, interval, quality
+        # )
         
-        # ExtractedImageオブジェクトを作成
-        images = []
-        for timestamp, image_path in extracted:
-            image = ExtractedImage(
-                file_path=image_path,
-                timestamp=timestamp,
-                source_media=video_file.file_path
-            )
-            images.append(image)
-            
-        logger.info(f"動画から{len(images)}枚の画像を抽出しました: {video_file.file_path}")
-        return images
+        # # ExtractedImageオブジェクトを作成
+        # images = []
+        # for timestamp, image_path in extracted:
+        #     image = ExtractedImage(
+        #         file_path=image_path,
+        #         timestamp=timestamp,
+        #         source_media=video_file.file_path
+        #     )
+        #     images.append(image)
+
+        # logger.info(f"動画から{len(images)}枚の画像を抽出しました: {video_file.file_path}")
+        # return images
 
     def extract_image_at_timestamp(self, video_file: MediaFile, timestamp: float, 
-                                  quality: int = 3) -> Optional[ExtractedImage]:
+                                  quality: int = 3, output_filename: Optional[str] = None) -> Optional[ExtractedImage]:
         """
         動画から特定の時間の画像を抽出
         
@@ -202,6 +204,7 @@ class MediaProcessorService:
             video_file: 動画ファイル
             timestamp: 抽出する時間（秒）
             quality: 画像品質（1-5、高いほど高品質）
+            output_filename: (Optional) 出力ファイル名
             
         Returns:
             抽出した画像、失敗した場合はNone
@@ -220,11 +223,20 @@ class MediaProcessorService:
         if not output_dir.exists():
             output_dir.mkdir(parents=True, exist_ok=True)
             
-        # 出力ファイル名
-        output_file = output_dir / f"{video_file.file_path.stem}_{int(timestamp):06d}.jpg"
+        if output_filename:
+            # Ensure the output_filename does not contain path traversal components for security
+            safe_output_filename = Path(output_filename).name
+            output_file = output_dir / safe_output_filename
+        else:
+            # Default filename if not provided (ensure it still has an extension, e.g. .jpg)
+            output_file = output_dir / f"{video_file.file_path.stem}_{int(timestamp):06d}.jpg"
+            # Note: The ffmpeg_wrapper.extract_image will determine the actual output format.
+            # If output_filename has .webp, ffmpeg_wrapper must support it.
         
         try:
             # 画像を抽出
+            # The ffmpeg_wrapper.extract_image call needs to handle the output_file path correctly.
+            # If output_filename specifies a .webp, ffmpeg_wrapper must be able to produce it.
             ffmpeg_wrapper.extract_image(video_file.file_path, output_file, timestamp, quality)
             
             # ExtractedImageオブジェクトを作成
@@ -237,7 +249,7 @@ class MediaProcessorService:
             logger.info(f"動画から画像を抽出しました: {video_file.file_path} -> {output_file} (時間: {timestamp:.2f}秒)")
             return image
         except Exception as e:
-            logger.error(f"画像抽出に失敗しました: {e}")
+            logger.error(f"画像抽出に失敗しました: {output_file} - {e}", exc_info=True) # Added output_file to log
             return None
 
     def detect_scene_changes(self, video_file: MediaFile, 
