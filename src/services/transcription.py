@@ -286,11 +286,14 @@ class TranscriptionService:
                 if not safe_description:
                     safe_description = f"screenshot_{timestamp_str.replace(':', '')}"
 
-                max_len = 100
                 if len(safe_description.encode('utf-8')) > max_len:
-                    safe_description = safe_description[:max_len//3]
-
-                filename = f"{safe_description}.webp"
+                    # Truncate by bytes, ensuring valid UTF-8
+                    encoded_desc = safe_description.encode('utf-8')
+                    if len(encoded_desc) > max_len:
+                        safe_description = encoded_desc[:max_len].decode('utf-8', 'ignore')
+                    # Ensure it's not empty after truncation if it was all multi-byte chars that got cut
+                    if not safe_description:
+                         safe_description = f"screenshot_{timestamp_str.replace(':', '')}_truncated"
 
                 logger.info(f"Screenshot instruction pattern found: time={timestamp_str} ({timestamp_seconds}s), desc='{description}', intended_filename='{filename}'")
                 logger.info(f"Original media file for screenshot: {original_media_file.file_path}")
