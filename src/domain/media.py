@@ -31,6 +31,32 @@ class MediaChunk:
     file_path: Path  # チャンクファイルのパス
     index: int  # チャンクのインデックス
 
+    def __hash__(self):
+        """
+        ハッシュ値を計算するメソッド
+
+        Returns:
+            int: ハッシュ値
+        """
+        return hash((self.start_time, self.end_time, str(self.file_path), self.index))
+
+    def __eq__(self, other):
+        """
+        等価性を判定するメソッド
+
+        Args:
+            other: 比較対象のオブジェクト
+
+        Returns:
+            bool: 等価の場合はTrue、それ以外はFalse
+        """
+        if not isinstance(other, MediaChunk):
+            return False
+        return (self.start_time == other.start_time and
+                self.end_time == other.end_time and
+                self.file_path == other.file_path and
+                self.index == other.index)
+
 
 @dataclass
 class MediaFile:
@@ -50,7 +76,7 @@ class MediaFile:
     def is_long_media(self) -> bool:
         """
         長時間メディアかどうかを判定
-        
+
         Returns:
             bool: 40分（2400秒）以上の場合はTrue、それ以外はFalse
         """
@@ -62,7 +88,7 @@ class MediaFile:
     def is_video(self) -> bool:
         """
         動画ファイルかどうかを判定
-        
+
         Returns:
             bool: 動画の場合はTrue、それ以外はFalse
         """
@@ -72,7 +98,7 @@ class MediaFile:
     def is_audio(self) -> bool:
         """
         音声ファイルかどうかを判定
-        
+
         Returns:
             bool: 音声の場合はTrue、それ以外はFalse
         """
@@ -82,7 +108,7 @@ class MediaFile:
     def is_dark_video(self) -> bool:
         """
         暗い動画かどうかを判定
-        
+
         Returns:
             bool: 暗い動画の場合はTrue、それ以外はFalse
         """
@@ -94,7 +120,7 @@ class MediaFile:
     def has_chunks(self) -> bool:
         """
         チャンクに分割されているかどうかを判定
-        
+
         Returns:
             bool: チャンクがある場合はTrue、それ以外はFalse
         """

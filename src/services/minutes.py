@@ -28,7 +28,7 @@ class MinutesGeneratorService:
         self.max_retries = config_manager.get("minutes.max_retries", 3)
         self.retry_delay = config_manager.get("minutes.retry_delay", 2)
         self.max_retry_delay = config_manager.get("minutes.max_retry_delay", 30)
-        self.prompt_path = config_manager.get_prompt_path("minutes_detailed")
+        self.prompt_path = config_manager.get_prompt_path("minutes_prompt_detailed")
         self.summary_prompt_path = config_manager.get_prompt_path("summary")
 
         # レート制限のための変数
@@ -166,6 +166,33 @@ class MinutesGeneratorService:
 
         return storage_manager.load_text(self.prompt_path)
 
+    def _extract_retry_delay_from_error(self, error) -> float:
+        """
+        エラーからretryDelayを抽出する
+
+        Args:
+            error: エラーオブジェクト
+
+        Returns:
+            抽出されたretryDelay（秒）、抽出できない場合はNone
+        """
+        try:
+            # エラーメッセージを文字列に変換
+            error_str = str(error)
+
+            # RESOURCE_EXHAUSTEDエラーかどうかを確認
+            if "RESOURCE_EXHAUSTED" in error_str:
+                # retryDelayを抽出
+                import re
+                retry_delay_match = re.search(r"'retryDelay': '(\d+)s'", error_str)
+                if retry_delay_match:
+                    return float(retry_delay_match.group(1))
+
+            return None
+        except Exception as e:
+            logger.warning(f"retryDelayの抽出に失敗しました: {e}")
+            return None
+
     def _generate_with_gemini(self, transcription_result: TranscriptionResult, 
                              prompt: str,
                              extracted_images: Optional[List[ExtractedImage]] = None,
@@ -257,9 +284,19 @@ class MinutesGeneratorService:
                     logger.error(f"議事録生成の最大再試行回数に達しました: {e}")
                     raise
 
-                # 再試行前に待機（指数バックオフ）
-                delay = min(self.retry_delay * (2 ** (retry_count - 1)), self.max_retry_delay)
-                logger.warning(f"議事録生成に失敗しました。{delay}秒後に再試行します ({retry_count}/{self.max_retries}): {e}")
+                # エラーからretryDelayを抽出
+                retry_delay = self._extract_retry_delay_from_error(e)
+
+                # retryDelayが抽出できた場合はそれを使用、できなかった場合は指数バックオフ
+                if retry_delay is not None:
+                    delay = retry_delay
+                    logger.warning(f"議事録生成に失敗しました: {e}")
+                    logger.info(f"APIから提供されたクールダウン時間 {delay}秒後に再試行します ({retry_count}/{self.max_retries})")
+                else:
+                    # 再試行前に待機（指数バックオフ）
+                    delay = min(self.retry_delay * (2 ** (retry_count - 1)), self.max_retry_delay)
+                    logger.warning(f"議事録生成に失敗しました。{delay}秒後に再試行します ({retry_count}/{self.max_retries}): {e}")
+
                 time.sleep(delay)
 
     def _generate_mock_minutes(self, transcription_result: TranscriptionResult,
@@ -632,9 +669,19 @@ class MinutesGeneratorService:
                     logger.error(f"要約生成の最大再試行回数に達しました: {e}")
                     raise
 
-                # 再試行前に待機（指数バックオフ）
-                delay = min(self.retry_delay * (2 ** (retry_count - 1)), self.max_retry_delay)
-                logger.warning(f"要約生成に失敗しました。{delay}秒後に再試行します ({retry_count}/{self.max_retries}): {e}")
+                # エラーからretryDelayを抽出
+                retry_delay = self._extract_retry_delay_from_error(e)
+
+                # retryDelayが抽出できた場合はそれを使用、できなかった場合は指数バックオフ
+                if retry_delay is not None:
+                    delay = retry_delay
+                    logger.warning(f"要約生成に失敗しました: {e}")
+                    logger.info(f"APIから提供されたクールダウン時間 {delay}秒後に再試行します ({retry_count}/{self.max_retries})")
+                else:
+                    # 再試行前に待機（指数バックオフ）
+                    delay = min(self.retry_delay * (2 ** (retry_count - 1)), self.max_retry_delay)
+                    logger.warning(f"要約生成に失敗しました。{delay}秒後に再試行します ({retry_count}/{self.max_retries}): {e}")
+
                 time.sleep(delay)
 
 

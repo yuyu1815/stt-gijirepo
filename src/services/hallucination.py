@@ -218,6 +218,33 @@ class HallucinationService:
         secs = int(seconds % 60)
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
+    def _extract_retry_delay_from_error(self, error) -> float:
+        """
+        エラーからretryDelayを抽出する
+
+        Args:
+            error: エラーオブジェクト
+
+        Returns:
+            抽出されたretryDelay（秒）、抽出できない場合はNone
+        """
+        try:
+            # エラーメッセージを文字列に変換
+            error_str = str(error)
+
+            # RESOURCE_EXHAUSTEDエラーかどうかを確認
+            if "RESOURCE_EXHAUSTED" in error_str:
+                # retryDelayを抽出
+                import re
+                retry_delay_match = re.search(r"'retryDelay': '(\d+)s'", error_str)
+                if retry_delay_match:
+                    return float(retry_delay_match.group(1))
+
+            return None
+        except Exception as e:
+            logger.warning(f"retryDelayの抽出に失敗しました: {e}")
+            return None
+
     def _check_rate_limit(self):
         """
         レート制限をチェックし、必要に応じて待機する
@@ -310,9 +337,19 @@ class HallucinationService:
                     logger.error(f"ハルシネーションチェックの最大再試行回数に達しました: {e}")
                     raise
 
-                # 再試行前に待機（指数バックオフ）
-                delay = min(self.retry_delay * (2 ** (retry_count - 1)), self.max_retry_delay)
-                logger.warning(f"ハルシネーションチェックに失敗しました。{delay}秒後に再試行します ({retry_count}/{self.max_retries}): {e}")
+                # エラーからretryDelayを抽出
+                retry_delay = self._extract_retry_delay_from_error(e)
+
+                # retryDelayが抽出できた場合はそれを使用、できなかった場合は指数バックオフ
+                if retry_delay is not None:
+                    delay = retry_delay
+                    logger.warning(f"ハルシネーションチェックに失敗しました: {e}")
+                    logger.info(f"APIから提供されたクールダウン時間 {delay}秒後に再試行します ({retry_count}/{self.max_retries})")
+                else:
+                    # 再試行前に待機（指数バックオフ）
+                    delay = min(self.retry_delay * (2 ** (retry_count - 1)), self.max_retry_delay)
+                    logger.warning(f"ハルシネーションチェックに失敗しました。{delay}秒後に再試行します ({retry_count}/{self.max_retries}): {e}")
+
                 time.sleep(delay)
 
     def _parse_hallucination_check(self, check_result: str, 
