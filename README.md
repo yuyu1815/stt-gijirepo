@@ -1,3 +1,5 @@
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/yuyu1815/stt-gijirepo)
+
 # 音声文字起こし・議事録自動生成ツール
 
 このプロジェクトは、音声ファイルや動画ファイルから文字起こしを行い、高品質な議事録を自動生成するツールです。Gemini APIを活用して、文字起こしの品質向上やハルシネーション（幻覚）の検出、構造化された議事録の生成を実現します。

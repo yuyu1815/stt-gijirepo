@@ -161,8 +161,51 @@ class Application:
                 logger.info(f"長時間メディアを分割します: {media_file.file_path}")
                 media_file = media_processor_service.split_media_file(media_file)
 
-            # 文字起こし
-            transcription_result = transcription_service.transcribe_audio(media_file)
+                # 各チャンクを個別に文字起こし
+                if media_file.has_chunks:
+                    logger.info(f"各チャンクを個別に文字起こしします: {len(media_file.chunks)}個のチャンク")
+                    chunk_transcriptions = []
+
+                    for chunk in media_file.chunks:
+                        logger.info(f"チャンク {chunk.index} を文字起こしします: {chunk.file_path}")
+                        # チャンクから一時的なMediaFileオブジェクトを作成
+                        chunk_media = MediaFile(
+                            file_path=chunk.file_path,
+                            media_type=media_file.media_type,
+                            duration=chunk.end_time - chunk.start_time
+                        )
+                        # チャンクを文字起こし
+                        chunk_result = transcription_service.transcribe_audio(chunk_media)
+
+                        # 文字起こしに失敗した場合はスキップ
+                        if chunk_result.is_failed:
+                            logger.warning(f"チャンク {chunk.index} の文字起こしに失敗しました: {chunk.file_path}")
+                            continue
+
+                        chunk_transcriptions.append(chunk_result)
+
+                    # すべてのチャンクの文字起こし結果を結合
+                    if chunk_transcriptions:
+                        logger.info(f"すべてのチャンクの文字起こし結果を結合します: {len(chunk_transcriptions)}個の結果")
+                        # 元のメディアファイルのパスを渡して結合
+                        transcription_result = transcription_service.combine_transcriptions(
+                            chunk_transcriptions,
+                            original_source_file=media_file.file_path
+                        )
+                    else:
+                        logger.error(f"文字起こしに成功したチャンクがありません: {media_file.file_path}")
+                        return {
+                            "success": False,
+                            "file_path": str(file_path),
+                            "error": "文字起こしに成功したチャンクがありません"
+                        }
+                else:
+                    # チャンクがない場合は通常の文字起こし
+                    logger.info(f"チャンクがないため、通常の文字起こしを実行します: {media_file.file_path}")
+                    transcription_result = transcription_service.transcribe_audio(media_file)
+            else:
+                # 長時間メディアでない場合は通常の文字起こし
+                transcription_result = transcription_service.transcribe_audio(media_file)
 
             # 文字起こしに失敗した場合
             if transcription_result.is_failed:

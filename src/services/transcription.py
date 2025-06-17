@@ -39,6 +39,70 @@ class TranscriptionService:
         self.requests_per_minute = config_manager.get("transcription.requests_per_minute", 5)  # デフォルトは1分あたり5リクエスト
         self.request_timestamps = []  # リクエストのタイムスタンプを記録するリスト
 
+    def combine_transcriptions(self, transcription_results: List[TranscriptionResult], original_source_file: Optional[Path] = None) -> TranscriptionResult:
+        """
+        複数の文字起こし結果を結合する
+
+        Args:
+            transcription_results: 文字起こし結果のリスト
+            original_source_file: 元のメディアファイルのパス（指定しない場合は最初のチャンクのパスを使用）
+
+        Returns:
+            結合された文字起こし結果
+        """
+        if not transcription_results:
+            logger.error("結合する文字起こし結果がありません")
+            raise ValueError("結合する文字起こし結果がありません")
+
+        # 最初の結果をベースにする
+        base_result = transcription_results[0]
+
+        # すべてのセグメントを収集
+        all_segments = []
+        for result in transcription_results:
+            all_segments.extend(result.segments)
+
+        # タイムスタンプでソート
+        all_segments.sort(key=lambda s: s.start_time)
+
+        # 結合された結果を作成（元のメディアファイルのパスを使用）
+        source_file = original_source_file if original_source_file else base_result.source_file
+        combined_result = TranscriptionResult(
+            source_file=source_file,
+            status=TranscriptionStatus.COMPLETED,
+            segments=all_segments
+        )
+
+        # 結果を保存
+        output_path = self._save_combined_transcription(combined_result)
+
+        logger.info(f"{len(transcription_results)}個の文字起こし結果を結合しました: {len(all_segments)}個のセグメント")
+        return combined_result
+
+    def _save_combined_transcription(self, result: TranscriptionResult) -> Path:
+        """
+        結合された文字起こし結果を保存
+
+        Args:
+            result: 文字起こし結果
+
+        Returns:
+            保存したファイルのパス
+        """
+        # 出力ディレクトリを取得
+        output_dir = storage_manager.get_output_dir("transcripts")
+
+        # ファイル名を生成
+        file_name = f"{result.source_file.stem}_combined_transcript.txt"
+        output_path = output_dir / file_name
+
+        # テキスト形式で保存
+        content = self._format_transcription_for_output(result)
+        storage_manager.save_text(content, output_path)
+
+        logger.info(f"結合された文字起こし結果を保存しました: {output_path}")
+        return output_path
+
     def transcribe_audio(self, media_file: MediaFile) -> TranscriptionResult:
         """
         音声ファイルを文字起こし
@@ -98,11 +162,12 @@ class TranscriptionService:
             result.status = TranscriptionStatus.FAILED
             return result
 
-        # 各チャンクを並列処理
+        # 各チャンクを並列処理（APIの動作不良を防ぐため1スレッドに制限）
         chunk_results = parallel_map(
             lambda chunk: self._transcribe_chunk(chunk, media_file),
             media_file.chunks,
-            ParallelExecutionMode.THREAD
+            ParallelExecutionMode.THREAD,
+            max_workers=1
         )
 
         # 結果を結合
@@ -187,6 +252,33 @@ class TranscriptionService:
 
         return storage_manager.load_text(self.prompt_path)
 
+    def _extract_retry_delay_from_error(self, error) -> float:
+        """
+        エラーからretryDelayを抽出する
+
+        Args:
+            error: エラーオブジェクト
+
+        Returns:
+            抽出されたretryDelay（秒）、抽出できない場合はNone
+        """
+        try:
+            # エラーメッセージを文字列に変換
+            error_str = str(error)
+
+            # RESOURCE_EXHAUSTEDエラーかどうかを確認
+            if "RESOURCE_EXHAUSTED" in error_str:
+                # retryDelayを抽出
+                import re
+                retry_delay_match = re.search(r"'retryDelay': '(\d+)s'", error_str)
+                if retry_delay_match:
+                    return float(retry_delay_match.group(1))
+
+            return None
+        except Exception as e:
+            logger.warning(f"retryDelayの抽出に失敗しました: {e}")
+            return None
+
     def _check_rate_limit(self):
         """
         レート制限をチェックし、必要に応じて待機する
@@ -249,7 +341,7 @@ class TranscriptionService:
 
                 while my_file.state.name == "PROCESSING":
                     print("ビデオを処理中...",end="\r")
-                    time.sleep(5)
+                    time.sleep(5)  # 5秒待機
                     my_file = client.files.get(name=my_file.name)
 
                 # Gemini APIを使用して文字起こし
@@ -271,9 +363,19 @@ class TranscriptionService:
                     logger.error(f"文字起こしの最大再試行回数に達しました: {e}")
                     return None
 
-                # 再試行前に待機（指数バックオフ）
-                delay = min(self.retry_delay * (2 ** (retry_count - 1)), self.max_retry_delay)
-                logger.warning(f"文字起こしに失敗しました。{delay}秒後に再試行します ({retry_count}/{self.max_retries}): {e}")
+                # エラーからretryDelayを抽出
+                retry_delay = self._extract_retry_delay_from_error(e)
+
+                # retryDelayが抽出できた場合はそれを使用、できなかった場合は指数バックオフ
+                if retry_delay is not None:
+                    delay = retry_delay
+                    logger.warning(f"文字起こしに失敗しました: {e}")
+                    logger.info(f"APIから提供されたクールダウン時間 {delay}秒後に再試行します ({retry_count}/{self.max_retries})")
+                else:
+                    # 再試行前に待機（指数バックオフ）
+                    delay = min(self.retry_delay * (2 ** (retry_count - 1)), self.max_retry_delay)
+                    logger.warning(f"文字起こしに失敗しました。{delay}秒後に再試行します ({retry_count}/{self.max_retries}): {e}")
+
                 time.sleep(delay)
         return None
 
