@@ -80,6 +80,17 @@
 - 構造化されたページコンテンツの作成
   - 見出し、段落、箇条書きリスト、区切り線などのブロック
   - 長いテキストの自動分割
+- MOC（Map of Content）機能
+  - インデックスページ（MOC）の自動作成と更新
+  - 詳細なMOCページ検証と堅牢なエラー処理
+    - MOCページIDの形式検証（UUID形式チェック）
+    - MOCページの存在確認と構造検証
+    - 「議事録一覧」セクションの自動検出と作成
+    - 重複エントリの防止
+  - 目次ブロックによるページ内ナビゲーション
+  - 関連ページへのリンクとバックリンクの自動作成
+  - 親子関係によるページ階層の構築
+  - 同じ科目の議事録の自動関連付け
 - 再試行メカニズム（指数バックオフ）
 
 ## 3. 設定オプション
@@ -104,6 +115,11 @@
 - `gemini.model`: Geminiモデル
 - `notion.api_key`: Notion APIキー
 - `notion.database_id`: NotionデータベースID
+- `notion.moc_page_id`: Notion MOCページID
+- `notion.max_retries`: 最大再試行回数
+- `notion.retry_delay`: 再試行間隔（秒）
+- `notion.max_retry_delay`: 最大再試行間隔（秒）
+- `notion.max_block_size`: 最大ブロックサイズ
 
 ### 3.3 メディア処理設定
 

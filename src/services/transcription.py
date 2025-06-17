@@ -8,9 +8,8 @@ import os
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
-import re # Added
+import re
 from google import genai
-from ..services.media_processor import media_processor_service # Added
 
 from ..domain.media import MediaChunk, MediaFile
 from ..domain.transcription import (
@@ -21,6 +20,7 @@ from ..infrastructure.config import config_manager
 from ..infrastructure.logger import logger
 from ..infrastructure.storage import storage_manager
 from ..utils.parallel import ParallelExecutionMode, parallel_map
+from ..utils.time_utils import format_time, time_str_to_seconds
 
 
 class TranscriptionService:
@@ -33,7 +33,6 @@ class TranscriptionService:
         self.retry_delay = config_manager.get("transcription.retry_delay", 2)
         self.max_retry_delay = config_manager.get("transcription.max_retry_delay", 30)
         self.prompt_path = config_manager.get_prompt_path("transcription")
-        self.media_processor_service = media_processor_service # Added
 
         # レート制限のための変数
         self.requests_per_minute = config_manager.get("transcription.requests_per_minute", 5)  # デフォルトは1分あたり5リクエスト
@@ -162,21 +161,23 @@ class TranscriptionService:
             result.status = TranscriptionStatus.FAILED
             return result
 
-        # 各チャンクを並列処理（APIの動作不良を防ぐため1スレッドに制限）
+        # チャンクをインデックス順にソート
+        sorted_chunks = sorted(media_file.chunks, key=lambda chunk: chunk.index)
+
+        logger.info(f"チャンクをインデックス順に処理します: {[chunk.index for chunk in sorted_chunks]}")
+
+        # 各チャンクを順番に処理（APIの動作不良を防ぐため1スレッドに制限）
         chunk_results = parallel_map(
             lambda chunk: self._transcribe_chunk(chunk, media_file),
-            media_file.chunks,
+            sorted_chunks,
             ParallelExecutionMode.THREAD,
             max_workers=1
         )
 
-        # 結果を結合
+        # 結果を結合（チャンクのインデックス順）
         all_segments = []
         for chunk_segments in chunk_results:
             all_segments.extend(chunk_segments)
-
-        # タイムスタンプでソート
-        all_segments.sort(key=lambda s: s.start_time)
 
         # 結果を設定
         result.segments = all_segments
@@ -385,19 +386,14 @@ class TranscriptionService:
 
         Args:
             transcription: 文字起こしテキスト
-            original_media_file: (Optional) 元のメディアファイルオブジェクト（ビデオの場合、スクリーンショット処理に使用）
+            original_media_file: (Optional) 元のメディアファイルオブジェクト
 
         Returns:
             文字起こしセグメントのリスト
         """
-        # スクリーンショットの処理
-        processed_transcription = transcription
-        if original_media_file and original_media_file.is_video:
-            processed_transcription = self._process_screenshots(transcription, original_media_file)
-
         # 文字起こしテキストをセグメントに分割
         segments = []
-        current_lines = processed_transcription.strip().split('\n')
+        current_lines = transcription.strip().split('\n')
         idx = 0
 
         while idx < len(current_lines):
@@ -409,10 +405,6 @@ class TranscriptionService:
                 continue
 
             try:
-                # スクリーンショットタグの行はスキップ
-                if line.lower().startswith("<screenshot>") or line.lower().startswith("</screenshot>"):
-                    idx += 1
-                    continue
 
                 # タイムスタンプと話者、テキストを抽出
                 # 例: [00:00:00 - 00:00:10] 話者A: これはテストです。
@@ -421,8 +413,8 @@ class TranscriptionService:
                 if segment_match:
                     # セグメント情報を抽出
                     start_str, end_str, speaker_name, text_content = segment_match.groups()
-                    start_time = self._time_str_to_seconds(start_str)
-                    end_time = self._time_str_to_seconds(end_str)
+                    start_time = time_str_to_seconds(start_str)
+                    end_time = time_str_to_seconds(end_str)
                     speaker = Speaker(id=speaker_name.strip(), name=speaker_name.strip())
                     current_text_content = text_content.strip()
 
@@ -462,127 +454,7 @@ class TranscriptionService:
 
         return segments
 
-    def _process_screenshots(self, transcription: str, original_media_file: MediaFile) -> str:
-        """
-        文字起こしテキストからスクリーンショット指示を処理し、必要に応じてスクリーンショットを抽出する
 
-        Args:
-            transcription: 文字起こしテキスト
-            original_media_file: 元のメディアファイルオブジェクト
-
-        Returns:
-            スクリーンショット指示を処理した後の文字起こしテキスト
-        """
-        # スクリーンショットパターンの定義
-        screenshot_pattern = re.compile(
-            r"<screenshot>\s*\[(\d{2}:\d{2}:\d{2})\]\s*(.*?)\s*</screenshot>",
-            re.DOTALL
-        )
-
-        # スクリーンショットタグを処理した後のテキスト
-        processed_text = transcription
-
-        # スクリーンショットタグを検索
-        for match in screenshot_pattern.finditer(transcription):
-            # タイムスタンプと説明を抽出
-            timestamp_str = match.group(1)
-            description = match.group(2).strip()
-            timestamp_seconds = self._time_str_to_seconds(timestamp_str)
-
-            # ファイル名の安全な作成
-            max_filename_len = 100  # ファイル名の最大長
-            safe_description = re.sub(r'[^\w぀-ヿ㐀-䶿一-鿿＀-￯\s-]', '', description).replace(' ', '_')
-            safe_description = re.sub(r'_+', '_', safe_description).strip('_')
-
-            if not safe_description:
-                safe_description = f"screenshot_{timestamp_str.replace(':', '')}"
-
-            # ファイル名が長すぎる場合は切り詰める
-            if len(safe_description.encode('utf-8')) > max_filename_len:
-                encoded_desc = safe_description.encode('utf-8')
-                safe_description = encoded_desc[:max_filename_len].decode('utf-8', 'ignore')
-                if not safe_description:
-                    safe_description = f"screenshot_{timestamp_str.replace(':', '')}_truncated"
-
-            # ファイル名を作成
-            filename = f"{safe_description}_{timestamp_str.replace(':', '-')}.jpg"
-
-            # ログ出力
-            logger.info(f"スクリーンショット指示を検出: 時間={timestamp_str} ({timestamp_seconds}秒), 説明='{description}', ファイル名='{filename}'")
-            logger.info(f"スクリーンショット元ファイル: {original_media_file.file_path}")
-
-            # スクリーンショット抽出処理（実際の処理はコメントアウト）
-            try:
-                # 実際のスクリーンショット抽出処理をここに実装
-                # 現在はプレースホルダーとしてログ出力のみ
-                logger.info(f"スクリーンショット抽出シミュレーション: '{filename}' を {timestamp_seconds}秒から抽出")
-
-                # 以下は実際の処理例（現在はコメントアウト）
-                # image_quality = config_manager.get("video_analysis.image_quality", 3)
-                # actual_image_path = media_processor_service.extract_image_at_timestamp(
-                #     video_file=original_media_file,
-                #     timestamp=timestamp_seconds,
-                #     quality=image_quality,
-                #     output_filename=filename
-                # )
-                # if actual_image_path:
-                #     logger.info(f"スクリーンショット抽出成功: {actual_image_path}")
-                # else:
-                #     logger.warning(f"スクリーンショット抽出に失敗した可能性があります: {filename} (パスが返されていません)")
-            except Exception as e:
-                logger.error(f"スクリーンショット抽出に失敗しました: {filename} - {e}", exc_info=True)
-
-            # スクリーンショットタグを文字起こしテキストから削除
-            processed_text = processed_text.replace(match.group(0), "")
-
-        return processed_text
-
-    def _time_str_to_seconds(self, time_str: str) -> float:
-        """
-        時間文字列を秒に変換
-
-        Args:
-            time_str: 時間文字列（HH:MM:SS形式）
-
-        Returns:
-            秒数
-        """
-        parts = time_str.split(':')
-        if len(parts) == 3: # HH:MM:SS
-            try:
-                hours, minutes, seconds = map(float, parts)
-                return hours * 3600 + minutes * 60 + seconds
-            except ValueError:
-                logger.warning(f"HH:MM:SS形式の時刻文字列のパースに失敗しました: {time_str}")
-                return 0.0
-        elif len(parts) == 2: # MM:SS
-            try:
-                minutes, seconds = map(float, parts)
-                return minutes * 60 + seconds
-            except ValueError:
-                logger.warning(f"MM:SS形式の時刻文字列のパースに失敗しました: {time_str}")
-                return 0.0
-        elif len(parts) == 1: # SS
-            try:
-                return float(parts[0])
-            except ValueError:
-                logger.warning(f"SS形式の時刻文字列のパースに失敗しました: {time_str}")
-                return 0.0
-        else:
-            # Handle H:MM:SS (single digit hour) which might be common
-            if ':' in time_str:
-                try:
-                    h, m, s = map(float, time_str.split(':'))
-                    if time_str.count(':') == 2: # Assume H:MM:SS if three parts after split
-                         return h * 3600 + m * 60 + s
-                except ValueError:
-                    pass # Fall through if this specific parsing fails
-            logger.warning(f"予期しない時刻文字列形式です: {time_str}。秒として直接パースするか、0を返します。")
-            try:
-                return float(time_str) # Try to parse as raw seconds as a last resort
-            except ValueError:
-                logger.error(f"無効な時刻文字列形式で、パースできません: {time_str}")
-                return 0.0 # Default or raise more specific error
 
     def _save_transcription_result(self, result: TranscriptionResult) -> Path:
         """
@@ -628,8 +500,8 @@ class TranscriptionService:
         # セグメント
         for segment in result.segments:
             # 時間をフォーマット
-            start_time_str = self._format_time(segment.start_time)
-            end_time_str = self._format_time(segment.end_time)
+            start_time_str = format_time(segment.start_time)
+            end_time_str = format_time(segment.end_time)
 
             # 話者
             speaker_str = f"{segment.speaker.name}: " if segment.speaker else ""
@@ -639,20 +511,6 @@ class TranscriptionService:
 
         return "\n".join(lines)
 
-    def _format_time(self, seconds: float) -> str:
-        """
-        秒を時間文字列にフォーマット
-
-        Args:
-            seconds: 秒数
-
-        Returns:
-            時間文字列（HH:MM:SS形式）
-        """
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 # シングルトンインスタンス

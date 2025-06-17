@@ -83,12 +83,15 @@ class Minutes:
     attendees: List[str] = field(default_factory=list)  # 出席者リスト
     metadata: Dict = field(default_factory=dict)  # メタデータ
     output_path: Optional[Path] = None  # 出力先パス
+    related_pages: Dict[str, str] = field(default_factory=dict)  # 関連ページ（ページID: タイトル）
+    parent_page_id: Optional[str] = None  # 親ページID
+    notion_page_id: Optional[str] = None  # NotionページID
 
     @property
     def has_images(self) -> bool:
         """
         画像があるかどうかを判定
-        
+
         Returns:
             bool: 画像がある場合はTrue、それ以外はFalse
         """
@@ -98,7 +101,7 @@ class Minutes:
     def has_tasks(self) -> bool:
         """
         タスク・宿題があるかどうかを判定
-        
+
         Returns:
             bool: タスク・宿題がある場合はTrue、それ以外はFalse
         """
@@ -108,7 +111,7 @@ class Minutes:
     def has_glossary(self) -> bool:
         """
         用語集があるかどうかを判定
-        
+
         Returns:
             bool: 用語集がある場合はTrue、それ以外はFalse
         """
@@ -117,7 +120,7 @@ class Minutes:
     def add_image(self, image: ExtractedImage) -> None:
         """
         画像を追加
-        
+
         Args:
             image: 追加する画像
         """
@@ -126,7 +129,7 @@ class Minutes:
     def add_task(self, task: MinutesTask) -> None:
         """
         タスク・宿題を追加
-        
+
         Args:
             task: 追加するタスク・宿題
         """
@@ -135,7 +138,7 @@ class Minutes:
     def add_glossary_item(self, item: GlossaryItem) -> None:
         """
         用語集の項目を追加
-        
+
         Args:
             item: 追加する用語集の項目
         """
@@ -144,7 +147,7 @@ class Minutes:
     def add_heading(self, heading: MinutesHeading) -> None:
         """
         見出しを追加
-        
+
         Args:
             heading: 追加する見出し
         """
@@ -153,7 +156,7 @@ class Minutes:
     def add_paragraph(self, section: MinutesSection, text: str) -> None:
         """
         段落を追加
-        
+
         Args:
             section: 追加するセクション
             text: 追加するテキスト
@@ -161,3 +164,51 @@ class Minutes:
         if section not in self.content.paragraphs:
             self.content.paragraphs[section] = []
         self.content.paragraphs[section].append(text)
+
+    def add_related_page(self, page_id: str, title: str) -> None:
+        """
+        関連ページを追加
+
+        Args:
+            page_id: 関連ページのID
+            title: 関連ページのタイトル
+        """
+        self.related_pages[page_id] = title
+
+    def remove_related_page(self, page_id: str) -> None:
+        """
+        関連ページを削除
+
+        Args:
+            page_id: 削除する関連ページのID
+        """
+        if page_id in self.related_pages:
+            del self.related_pages[page_id]
+
+    def set_parent_page(self, page_id: str) -> None:
+        """
+        親ページを設定
+
+        Args:
+            page_id: 親ページのID
+        """
+        self.parent_page_id = page_id
+
+    def set_notion_page_id(self, page_id: str) -> None:
+        """
+        NotionページIDを設定
+
+        Args:
+            page_id: NotionページID
+        """
+        self.notion_page_id = page_id
+
+    @property
+    def has_related_pages(self) -> bool:
+        """
+        関連ページがあるかどうかを判定
+
+        Returns:
+            bool: 関連ページがある場合はTrue、それ以外はFalse
+        """
+        return len(self.related_pages) > 0

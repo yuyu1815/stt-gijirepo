@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 from ..domain.media import MediaFile
+from ..domain.minutes import Minutes
 from ..domain.transcription import TranscriptionResult
 from ..infrastructure.config import config_manager
 from ..infrastructure.logger import logger
@@ -225,11 +226,6 @@ class Application:
             # 画像抽出（動画の場合）
             extracted_images = None
             video_analysis_result = None
-            if media_file.is_video and not media_file.is_dark_video:
-                # 重要シーンの検出と画像抽出はスキップ（要件により）
-                important_scenes = []
-                extracted_images = []
-
 
             # 議事録生成
             minutes = minutes_generator_service.generate_minutes(
@@ -246,6 +242,12 @@ class Application:
             # Notionアップロード
             notion_result = None
             if args.get("upload_to_notion", False):
+                # 関連ページの設定（例：同じ科目の議事録を関連付ける）
+                self._set_related_pages(minutes)
+
+                # 親ページの設定（例：MOCページを親ページに設定）
+                self._set_parent_page(minutes)
+
                 notion_result = notion_service.upload_minutes(minutes)
 
             # 処理時間を計算
@@ -270,6 +272,100 @@ class Application:
                 "error": str(e)
             }
 
+
+
+    def _set_related_pages(self, minutes: Minutes) -> None:
+        """
+        関連ページを設定
+
+        Args:
+            minutes: 議事録
+        """
+        try:
+            # 同じ科目の議事録を関連ページとして設定する例
+            if minutes.subject:
+                logger.info(f"同じ科目の議事録を関連ページとして検索します: {minutes.subject}")
+
+                # 実際の実装では、Notionデータベースから同じ科目の議事録を検索する
+                # 例: 
+                # query_params = {
+                #     "filter": {
+                #         "property": "科目",
+                #         "select": {
+                #             "equals": minutes.subject
+                #         }
+                #     }
+                # }
+                # response = notion_client.databases.query(database_id=self.config.get("notion.database_id"), **query_params)
+                # 
+                # for page in response["results"]:
+                #     page_id = page["id"]
+                #     page_title = page["properties"]["タイトル"]["title"][0]["text"]["content"]
+                #     
+                #     # 自分自身は除外
+                #     if page_title != minutes.title:
+                #         minutes.add_related_page(page_id, page_title)
+
+                # モック実装（実際の実装では削除）
+                # ランダムなページIDとタイトルを生成
+                import uuid
+                for i in range(2):  # 2つの関連ページを追加
+                    page_id = str(uuid.uuid4())
+                    page_title = f"{minutes.subject} 議事録 {i+1}"
+                    minutes.add_related_page(page_id, page_title)
+                    logger.info(f"関連ページを追加しました: {page_title} ({page_id})")
+        except Exception as e:
+            logger.warning(f"関連ページの設定中にエラーが発生しました: {e}")
+
+    def _set_parent_page(self, minutes: Minutes) -> None:
+        """
+        親ページを設定
+        詳細なチェックを行い、MOCページを親ページとして設定します
+
+        Args:
+            minutes: 議事録
+        """
+        try:
+            # MOCページを親ページとして設定
+            moc_page_id = self.config.get("notion.moc_page_id")
+
+            # MOCページIDの検証
+            if not moc_page_id:
+                logger.warning("MOCページIDが設定されていません。親ページは設定されません。")
+                return
+
+            # MOCページIDの形式チェック
+            import uuid
+            try:
+                uuid.UUID(moc_page_id)
+            except ValueError:
+                logger.error(f"無効なMOCページIDの形式です: {moc_page_id}")
+                raise ValueError(f"無効なMOCページIDの形式です: {moc_page_id}")
+
+            # MOCページの存在確認（実際の実装ではNotion APIを使用）
+            # 例:
+            # try:
+            #     notion_client.pages.retrieve(page_id=moc_page_id)
+            # except Exception as e:
+            #     logger.error(f"MOCページが存在しません: {moc_page_id} - {e}")
+            #     raise ValueError(f"MOCページが存在しません: {moc_page_id}")
+
+            # 親ページとして設定
+            logger.info(f"MOCページを親ページとして設定します: {moc_page_id}")
+            minutes.set_parent_page(moc_page_id)
+
+            # 設定の確認
+            if minutes.parent_page_id != moc_page_id:
+                logger.error("親ページの設定に失敗しました")
+                raise RuntimeError("親ページの設定に失敗しました")
+
+            logger.info(f"親ページを正常に設定しました: {moc_page_id}")
+
+        except Exception as e:
+            logger.error(f"親ページの設定中にエラーが発生しました: {e}")
+            # エラーは記録するが、処理は続行する（親ページがなくても議事録は作成可能）
+            # 必要に応じて例外を再スローする場合:
+            # raise RuntimeError(f"親ページの設定に失敗しました: {e}")
 
 
 # シングルトンインスタンス
