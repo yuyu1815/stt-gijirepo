@@ -278,7 +278,7 @@ def transcribe_audio_with_gemini(file_path: str) -> dict | None:
              print(f"エラー: 音声ファイルの読み込みに失敗しました: {e}")
              return None
 
-        prompt = load_prompt("PROMPT\\transcription_prompt.md")
+        prompt = load_prompt("PROMPT/transcription_prompt.md")
 
         print(f"音声ファイルを読み込み中: {file_path}")
         try:
@@ -402,7 +402,7 @@ def check_hallucination_with_gemini(file_path: str, transcription: str) -> dict 
              return None
 
         # プロンプトファイルを読み込み、変数を置換
-        prompt_template = load_prompt("PROMPT\\hallucination_check_prompt.md")
+        prompt_template = load_prompt("PROMPT/hallucination_check_prompt.md")
         prompt = prompt_template.replace("{transcription}", transcription)
 
         print(f"音声ファイルを読み込み中: {file_path}")
@@ -686,7 +686,7 @@ def split_video(file_path, max_frames=3600):
 def process_video_with_gemini(file_path, prompt=None):
     """Gemini APIを使用して動画を処理し、内容を分析する関数"""
     if prompt is None:
-        prompt = load_prompt("PROMPT\\video_analysis_prompt.md")
+        prompt = load_prompt("PROMPT/video_analysis_prompt.md")
     print(f"Geminiで動画処理中: {file_path}")
 
     try:
@@ -854,7 +854,7 @@ def generate_summary(transcription):
             return "要約の生成中にエラーが発生しました。"
 
         # 要約生成用プロンプトを読み込み、変数を置換
-        prompt_template = load_prompt("PROMPT\\summary_prompt.md")
+        prompt_template = load_prompt("PROMPT/summary_prompt.md")
         prompt = prompt_template.replace("{transcription}", transcription['transcription'])
         client = genai.Client(api_key=api_key)
         # ビデオは、使用する前に処理する必要があります。
@@ -909,7 +909,7 @@ def generate_meeting_minutes(transcription, file_path):
         # 授業変更があった場合は注記を追加
         class_change_note = "※この授業は急遽変更されました。" if class_info.get("changed", False) else ""
 
-        prompt_template = load_prompt("PROMPT\\minutes_prompt_detailed.md")
+        prompt_template = load_prompt("PROMPT/minutes_prompt_detailed.md")
         prompt = prompt_template.replace("{class_name}", class_info["name"])
         prompt = prompt.replace("{class_change_note}", class_change_note)
         prompt = prompt.replace("{datetime}", class_info.get("datetime", "[YYYY年MM月DD日 HH:MM～HH:MM]"))
@@ -1048,7 +1048,7 @@ def main():
                         base_name = os.path.splitext(os.path.basename(processed_file_path))[0]
 
                         # 出力ディレクトリの設定を読み込む
-                        output_dir = "."  # デフォルトは現在のディレクトリ
+                        output_dir = ".."  # デフォルトは現在のディレクトリ
                         try:
                             with open('settings.json', 'r', encoding='utf-8') as f:
                                 settings = json.load(f)
@@ -1282,7 +1282,7 @@ def main():
                     base_name = os.path.splitext(os.path.basename(audio_file_path))[0]
 
                     # 出力ディレクトリの設定を読み込む
-                    output_dir = "."  # デフォルトは現在のディレクトリ
+                    output_dir = ".."  # デフォルトは現在のディレクトリ
                     try:
                         with open('settings.json', 'r', encoding='utf-8') as f:
                             settings = json.load(f)

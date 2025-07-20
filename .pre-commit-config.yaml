@@ -1,0 +1,252 @@
+# STT議事録システム Pre-commit設定
+# コミット前の自動品質チェック
+
+repos:
+  # =============================================================================
+  # 基本的なファイルチェック
+  # =============================================================================
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      # ファイル終端の改行チェック
+      - id: end-of-file-fixer
+        exclude: \.md$
+      
+      # 行末の空白削除
+      - id: trailing-whitespace
+        exclude: \.md$
+      
+      # 大きなファイルの追加を防止 (10MB制限)
+      - id: check-added-large-files
+        args: ['--maxkb=10240']
+      
+      # バイナリファイルの誤コミットを防止
+      - id: check-executables-have-shebangs
+      
+      # JSON/YAML構文チェック
+      - id: check-json
+      - id: check-yaml
+        args: ['--unsafe']  # カスタムタグを許可
+      
+      # TOML構文チェック
+      - id: check-toml
+      
+      # マージコンフリクトマーカーのチェック
+      - id: check-merge-conflict
+      
+      # デバッグ文の検出
+      - id: debug-statements
+      
+      # プライベートキーの検出
+      - id: detect-private-key
+      
+      # 重複キーの検出
+      - id: check-case-conflict
+
+  # =============================================================================
+  # Python コードフォーマット
+  # =============================================================================
+  - repo: https://github.com/psf/black
+    rev: 23.7.0
+    hooks:
+      - id: black
+        language_version: python3
+        args: ['--line-length=88']
+        files: \.py$
+
+  # =============================================================================
+  # Import 整理
+  # =============================================================================
+  - repo: https://github.com/pycqa/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        args: ['--profile=black', '--line-length=88']
+        files: \.py$
+
+  # =============================================================================
+  # コード品質チェック
+  # =============================================================================
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.0.0
+    hooks:
+      - id: flake8
+        args: 
+          - '--max-line-length=88'
+          - '--extend-ignore=E203,W503,E501'
+          - '--max-complexity=10'
+        files: \.py$
+        additional_dependencies:
+          - flake8-docstrings
+          - flake8-import-order
+          - flake8-bugbear
+
+  # =============================================================================
+  # 型チェック
+  # =============================================================================
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.5.1
+    hooks:
+      - id: mypy
+        args: ['--ignore-missing-imports', '--strict-optional']
+        files: ^src/
+        additional_dependencies:
+          - types-requests
+          - types-python-dateutil
+
+  # =============================================================================
+  # セキュリティチェック
+  # =============================================================================
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.5
+    hooks:
+      - id: bandit
+        args: ['-r', 'src/', '-f', 'json']
+        files: \.py$
+        exclude: src/tests/
+
+  # =============================================================================
+  # ドキュメント品質
+  # =============================================================================
+  - repo: https://github.com/pycqa/pydocstyle
+    rev: 6.3.0
+    hooks:
+      - id: pydocstyle
+        args: ['--convention=google']
+        files: ^src/
+        exclude: __init__\.py$
+
+  # =============================================================================
+  # 依存関係チェック
+  # =============================================================================
+  - repo: https://github.com/Lucas-C/pre-commit-hooks-safety
+    rev: v1.3.2
+    hooks:
+      - id: python-safety-dependencies-check
+        files: requirements.*\.txt$
+
+  # =============================================================================
+  # Markdown/ドキュメント
+  # =============================================================================
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.35.0
+    hooks:
+      - id: markdownlint
+        args: ['--fix']
+        files: \.md$
+        exclude: ^\.junie/
+
+  # =============================================================================
+  # 設定ファイル検証
+  # =============================================================================
+  - repo: local
+    hooks:
+      # 環境変数ファイルの検証
+      - id: check-env-example
+        name: .env.example 整合性チェック
+        entry: python
+        language: system
+        args: ['-c', 'import os; assert os.path.exists(".env.example"), ".env.example が存在しません"']
+        files: \.env\.example$
+        pass_filenames: false
+      
+      # requirements.txt の検証
+      - id: check-requirements
+        name: requirements.txt 構文チェック
+        entry: python
+        language: system
+        args: ['-m', 'pip', 'check']
+        files: requirements.*\.txt$
+        pass_filenames: false
+      
+      # Python import チェック
+      - id: check-python-imports
+        name: Python import 検証
+        entry: python
+        language: system
+        args: ['-c', 'import sys; sys.path.insert(0, "src"); import src']
+        files: ^src/.*\.py$
+        pass_filenames: false
+      
+      # テストファイルの存在チェック
+      - id: check-test-coverage
+        name: テストファイル存在チェック
+        entry: bash
+        language: system
+        args: ['-c', 'find src -name "*.py" -not -path "*/tests/*" -not -name "__init__.py" | while read f; do test_f=$(echo $f | sed "s|src/|src/tests/test_|" | sed "s|\.py$|.py|"); if [ ! -f "$test_f" ]; then echo "テストファイルが見つかりません: $test_f"; fi; done']
+        files: ^src/.*\.py$
+        pass_filenames: false
+
+  # =============================================================================
+  # STTシステム固有チェック
+  # =============================================================================
+  - repo: local
+    hooks:
+      # API キーの漏洩チェック
+      - id: check-api-keys
+        name: API キー漏洩チェック
+        entry: bash
+        language: system
+        args: ['-c', 'if grep -r "AIza\|sk-\|xoxb-\|secret_" src/ --exclude-dir=tests; then echo "API キーが含まれている可能性があります"; exit 1; fi']
+        files: \.py$
+        pass_filenames: false
+      
+      # ハードコードされたパスのチェック
+      - id: check-hardcoded-paths
+        name: ハードコードパスチェック
+        entry: bash
+        language: system
+        args: ['-c', 'if grep -r "/Users/\|C:\\\\Users\|/home/" src/ --exclude-dir=tests; then echo "ハードコードされたパスが含まれています"; exit 1; fi']
+        files: \.py$
+        pass_filenames: false
+      
+      # TODO/FIXME コメントの検出
+      - id: check-todos
+        name: TODO/FIXME 検出
+        entry: bash
+        language: system
+        args: ['-c', 'if grep -r "TODO\|FIXME\|XXX\|HACK" src/ --exclude-dir=tests; then echo "未完了のタスクがあります"; exit 0; fi']
+        files: \.py$
+        pass_filenames: false
+        verbose: true
+      
+      # ログレベルの適切性チェック
+      - id: check-log-levels
+        name: ログレベルチェック
+        entry: bash
+        language: system
+        args: ['-c', 'if grep -r "print(" src/ --exclude-dir=tests; then echo "print文の代わりにloggerを使用してください"; exit 1; fi']
+        files: \.py$
+        pass_filenames: false
+
+# =============================================================================
+# Pre-commit 設定
+# =============================================================================
+default_stages: [commit]
+fail_fast: false
+minimum_pre_commit_version: '3.0.0'
+
+# 除外するファイル・ディレクトリ
+exclude: |
+  (?x)^(
+    \.junie/.*|
+    old_src/.*|
+    temp/.*|
+    logs/.*|
+    output/.*|
+    .*\.log|
+    .*\.tmp
+  )$
+
+# CI環境での設定
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit.com hooks
+    
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false

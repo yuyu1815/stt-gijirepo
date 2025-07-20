@@ -1,0 +1,324 @@
+# STT議事録システム CI/CD ワークフロー
+# 継続的インテグレーション・品質チェック
+
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.8'
+  POETRY_VERSION: '1.5.1'
+
+jobs:
+  # =============================================================================
+  # コード品質チェック
+  # =============================================================================
+  quality-check:
+    name: コード品質チェック
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+      
+    - name: Python環境セットアップ
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: 依存関係キャッシュ
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: 依存関係インストール
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install black isort flake8 mypy bandit safety
+        
+    - name: コードフォーマットチェック (Black)
+      run: black --check --diff src/
+      
+    - name: Import順序チェック (isort)
+      run: isort --check-only --diff src/
+      
+    - name: コード品質チェック (flake8)
+      run: flake8 src/ --max-line-length=88 --extend-ignore=E203,W503,E501
+      
+    - name: 型チェック (mypy)
+      run: mypy src/ --ignore-missing-imports
+      
+    - name: セキュリティチェック (bandit)
+      run: bandit -r src/ -f json -o bandit-report.json || true
+      
+    - name: 依存関係脆弱性チェック (safety)
+      run: safety check --json --output safety-report.json || true
+      
+    - name: セキュリティレポートアップロード
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+
+  # =============================================================================
+  # 単体テスト
+  # =============================================================================
+  unit-tests:
+    name: 単体テスト
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11']
+        
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+      
+    - name: Python ${{ matrix.python-version }} セットアップ
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: 依存関係キャッシュ
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-${{ matrix.python-version }}-pip-${{ hashFiles('**/requirements.txt') }}
+        
+    - name: 依存関係インストール
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio pytest-mock
+        
+    - name: 単体テスト実行
+      run: |
+        pytest src/tests/test_core/ src/tests/test_utils/ \
+          --cov=src/core --cov=src/utils \
+          --cov-report=xml --cov-report=html \
+          --junitxml=junit-results.xml \
+          -v
+          
+    - name: カバレッジレポートアップロード
+      uses: codecov/codecov-action@v3
+      if: matrix.python-version == '3.8'
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        
+    - name: テスト結果アップロード
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results-${{ matrix.python-version }}
+        path: |
+          junit-results.xml
+          htmlcov/
+
+  # =============================================================================
+  # 統合テスト
+  # =============================================================================
+  integration-tests:
+    name: 統合テスト
+    runs-on: ubuntu-latest
+    needs: [quality-check, unit-tests]
+    
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+      
+    - name: Python環境セットアップ
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: FFmpegインストール
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        
+    - name: 依存関係インストール
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio pytest-mock
+        
+    - name: テスト用環境変数設定
+      run: |
+        echo "GEMINI_API_KEY=test_key" >> $GITHUB_ENV
+        echo "NOTION_TOKEN=test_token" >> $GITHUB_ENV
+        echo "LOG_LEVEL=DEBUG" >> $GITHUB_ENV
+        
+    - name: 統合テスト実行
+      run: |
+        pytest src/tests/test_workflows/ \
+          --cov=src/workflows \
+          --cov-report=xml \
+          --junitxml=integration-results.xml \
+          -v -s
+          
+    - name: 統合テスト結果アップロード
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: integration-test-results
+        path: |
+          integration-results.xml
+          coverage.xml
+
+  # =============================================================================
+  # パフォーマンステスト
+  # =============================================================================
+  performance-tests:
+    name: パフォーマンステスト
+    runs-on: ubuntu-latest
+    needs: [integration-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+      
+    - name: Python環境セットアップ
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: FFmpegインストール
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        
+    - name: 依存関係インストール
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest-benchmark memory-profiler
+        
+    - name: パフォーマンステスト実行
+      run: |
+        python src/scripts/performance_benchmark.py --output benchmark-results.json
+        
+    - name: ベンチマーク結果アップロード
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results
+        path: benchmark-results.json
+
+  # =============================================================================
+  # ドキュメント生成
+  # =============================================================================
+  documentation:
+    name: ドキュメント生成
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+      
+    - name: Python環境セットアップ
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        
+    - name: 依存関係インストール
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install sphinx sphinx-rtd-theme pydoc-markdown
+        
+    - name: APIドキュメント生成
+      run: |
+        mkdir -p docs/api
+        python -c "
+        import pydoc
+        import src.workflows.stt_workflow
+        import src.core.ai_services
+        
+        with open('docs/api/workflow_api.md', 'w') as f:
+            f.write('# Workflow API\\n\\n')
+            f.write(pydoc.render_doc(src.workflows.stt_workflow, renderer=pydoc.plaintext))
+            
+        with open('docs/api/core_api.md', 'w') as f:
+            f.write('# Core API\\n\\n')
+            f.write(pydoc.render_doc(src.core.ai_services, renderer=pydoc.plaintext))
+        "
+        
+    - name: ドキュメントアップロード
+      uses: actions/upload-artifact@v3
+      with:
+        name: documentation
+        path: docs/
+
+  # =============================================================================
+  # セキュリティスキャン
+  # =============================================================================
+  security-scan:
+    name: セキュリティスキャン
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: チェックアウト
+      uses: actions/checkout@v4
+      
+    - name: CodeQL解析実行
+      uses: github/codeql-action/init@v2
+      with:
+        languages: python
+        
+    - name: CodeQL解析完了
+      uses: github/codeql-action/analyze@v2
+      
+    - name: Trivy脆弱性スキャン
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        
+    - name: Trivy結果アップロード
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # =============================================================================
+  # 通知
+  # =============================================================================
+  notify:
+    name: 通知
+    runs-on: ubuntu-latest
+    needs: [quality-check, unit-tests, integration-tests]
+    if: always()
+    
+    steps:
+    - name: 成功通知
+      if: needs.quality-check.result == 'success' && needs.unit-tests.result == 'success' && needs.integration-tests.result == 'success'
+      run: |
+        echo "✅ すべてのチェックが成功しました"
+        echo "コミット: ${{ github.sha }}"
+        echo "ブランチ: ${{ github.ref }}"
+        
+    - name: 失敗通知
+      if: needs.quality-check.result == 'failure' || needs.unit-tests.result == 'failure' || needs.integration-tests.result == 'failure'
+      run: |
+        echo "❌ チェックに失敗しました"
+        echo "品質チェック: ${{ needs.quality-check.result }}"
+        echo "単体テスト: ${{ needs.unit-tests.result }}"
+        echo "統合テスト: ${{ needs.integration-tests.result }}"
+        exit 1

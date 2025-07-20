@@ -84,7 +84,7 @@ python notion_uploader.py lecture_note.md --subject "webアプリケーション
 ### Pythonコードから使用
 
 ```python
-from notion_uploader import NotionUploader
+from old_src.notion_uploader import NotionUploader
 
 # インスタンス化
 uploader = NotionUploader()

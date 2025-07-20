@@ -1,30 +1,58 @@
 {
-	"schedule": {
-	  "月曜日": {
-		"1限": {"name": "授業名1", "teacher": "教師名1", "start_time": "09:30", "end_time": "11:00"},
-		"2限": {"name": "授業名2", "teacher": "教師名2", "start_time": "11:10", "end_time": "12:40"},
-		"3限": {"name": "授業名3", "teacher": "教師名3", "start_time": "13:40", "end_time": "15:10"},
-		"4限": {"name": "授業名4", "teacher": "教師名4", "start_time": "15:20", "end_time": "16:50"}
-	  },
-	  "火曜日": {
-		"1限": {"name": "授業名5", "teacher": "教師名5", "start_time": "09:30", "end_time": "11:00"},
-		"2限": {"name": "授業名6", "teacher": "教師名6", "start_time": "11:10", "end_time": "12:40"},
-		"3限": {"name": "授業名7", "teacher": "教師名7", "start_time": "13:40", "end_time": "15:10"},
-		"4限": {"name": "", "teacher": "", "start_time": "15:20", "end_time": "16:50"}
-	  }
-	},
-  "notion": {
-    "token": "YOUR_NOTION_TOKEN",
-    "url": "YOUR_NOTION_URL"
+  "_comment": "STT議事録システム - LangGraph版 設定ファイル",
+  
+  "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE",
+  "gemini_model": "gemini-1.5-pro",
+  "notion_token": "YOUR_NOTION_TOKEN_HERE",
+  "notion_database_id": "YOUR_NOTION_DATABASE_ID_HERE",
+  
+  "max_audio_duration": 2400,
+  "chunk_size": 600,
+  "max_retries": 5,
+  "retry_delay": 2.0,
+  
+  "min_confidence_threshold": 0.7,
+  "enable_quality_check": true,
+  "enable_hallucination_check": true,
+  
+  "output_format": "markdown",
+  "include_timestamps": true,
+  "include_speaker_labels": false,
+  
+  "app": {
+    "language": "ja"
   },
-  "gemini": {
-    "api_key": "YOUR_GEMINI_API_KEY",
-    "agent": "models/gemini-2.5-flash-preview-04-17"
-  },
-  "output": {
-    "directory": "output",
-    "txt_directory": "output/txt",
-    "json_directory": "output/json"
-  },
-   "minutes_prompt_file": "PROMPT\\minutes_prompt_detailed.md"
+  
+  "schedule": {
+    "月曜日": {
+      "1限": {"name": "プログラミング基礎", "teacher": "田中先生", "start_time": "09:30", "end_time": "11:00"},
+      "2限": {"name": "データベース設計", "teacher": "佐藤先生", "start_time": "11:10", "end_time": "12:40"},
+      "3限": {"name": "システム分析", "teacher": "山田先生", "start_time": "13:40", "end_time": "15:10"},
+      "4限": {"name": "プロジェクト管理", "teacher": "高橋先生", "start_time": "15:20", "end_time": "16:50"}
+    },
+    "火曜日": {
+      "1限": {"name": "システム設計", "teacher": "鈴木先生", "start_time": "09:30", "end_time": "11:00"},
+      "2限": {"name": "ネットワーク基礎", "teacher": "伊藤先生", "start_time": "11:10", "end_time": "12:40"},
+      "3限": {"name": "セキュリティ", "teacher": "渡辺先生", "start_time": "13:40", "end_time": "15:10"},
+      "4限": {"name": "AI・機械学習", "teacher": "中村先生", "start_time": "15:20", "end_time": "16:50"}
+    },
+    "水曜日": {
+      "1限": {"name": "ウェブ開発", "teacher": "小林先生", "start_time": "09:30", "end_time": "11:00"},
+      "2限": {"name": "モバイル開発", "teacher": "加藤先生", "start_time": "11:10", "end_time": "12:40"},
+      "3限": {"name": "クラウド技術", "teacher": "吉田先生", "start_time": "13:40", "end_time": "15:10"},
+      "4限": {"name": "DevOps", "teacher": "松本先生", "start_time": "15:20", "end_time": "16:50"}
+    },
+    "木曜日": {
+      "1限": {"name": "アルゴリズム", "teacher": "井上先生", "start_time": "09:30", "end_time": "11:00"},
+      "2限": {"name": "データ構造", "teacher": "木村先生", "start_time": "11:10", "end_time": "12:40"},
+      "3限": {"name": "ソフトウェア工学", "teacher": "林先生", "start_time": "13:40", "end_time": "15:10"},
+      "4限": {"name": "品質管理", "teacher": "斎藤先生", "start_time": "15:20", "end_time": "16:50"}
+    },
+    "金曜日": {
+      "1限": {"name": "ビジネス分析", "teacher": "清水先生", "start_time": "09:30", "end_time": "11:00"},
+      "2限": {"name": "プレゼンテーション", "teacher": "山口先生", "start_time": "11:10", "end_time": "12:40"},
+      "3限": {"name": "チームワーク", "teacher": "橋本先生", "start_time": "13:40", "end_time": "15:10"},
+      "4限": {"name": "総合演習", "teacher": "青木先生", "start_time": "15:20", "end_time": "16:50"}
+    }
+  }
 }
