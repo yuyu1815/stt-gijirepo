@@ -13,6 +13,7 @@ import tempfile
 from src.workflows.state import STTState
 from src.utils import get_logger, FileProcessingError
 from src.utils.logging_config import log_state_transition, LogContext
+from src.core.video_processing import VideoProcessor
 
 # OpenCVのインポートを試行（オプション）
 try:

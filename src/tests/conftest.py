@@ -17,8 +17,8 @@ from unittest.mock import Mock, MagicMock, patch
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from workflows.state import STTState, STTConfig, create_initial_state, create_default_config
-from utils.performance_monitor import PerformanceMonitor
+from src.workflows.state import STTState, STTConfig, create_initial_state, create_default_config
+from src.utils.performance_monitor import PerformanceMonitor
 
 
 # テスト設定

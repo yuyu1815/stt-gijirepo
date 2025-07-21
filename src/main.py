@@ -242,8 +242,9 @@ def main():
     
     parser.add_argument(
         '--upload-notion', '-n',
-        action='store_true',
-        help='Notionに議事録をアップロード'
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='Notionへのアップロードを有効化します (無効にする場合は --no-upload-notion)'
     )
     
     parser.add_argument(
@@ -282,6 +283,12 @@ def main():
         '--verbose', '-v',
         action='store_true',
         help='詳細な出力を表示'
+    )
+    
+    parser.add_argument(
+        '--force-video-mode',
+        action='store_true',
+        help='音声ファイルを動画処理ルート（マルチモーダル解析）で強制的に処理'
     )
     
     args = parser.parse_args()
@@ -331,6 +338,15 @@ def main():
             for file_path in media_files:
                 print(f"  - {file_path}")
         
+        # Notionアップロード可否の最終判断
+        upload_enabled_by_user = args.upload_notion
+        notion_db_id = config.get("notion_database_id")
+        should_upload_to_notion = upload_enabled_by_user and bool(notion_db_id)
+        
+        # ユーザーがアップロードを意図していたのにIDがない場合は通知
+        if upload_enabled_by_user and not bool(notion_db_id):
+            print("情報: NotionデータベースIDが設定されていないため、Notionへのアップロードはスキップされます。")
+        
         # 処理実行
         if args.batch and len(media_files) > 1:
             print(f"バッチ処理を開始 (最大並列数: {args.max_concurrent})")
@@ -338,7 +354,8 @@ def main():
                 media_files,
                 config,
                 max_concurrent=args.max_concurrent,
-                upload_to_notion=args.upload_notion
+                upload_to_notion=should_upload_to_notion,
+                force_video_mode=args.force_video_mode
             )
             
             # バッチ処理結果の表示
@@ -361,7 +378,8 @@ def main():
             result = execute_stt_workflow(
                 file_path,
                 config,
-                upload_to_notion=args.upload_notion
+                upload_to_notion=should_upload_to_notion,
+                force_video_mode=args.force_video_mode
             )
             
             # 結果表示

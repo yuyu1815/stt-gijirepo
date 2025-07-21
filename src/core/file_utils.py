@@ -401,6 +401,37 @@ class FileUtils:
         
         return deleted_count
     
+    @staticmethod
+    def cleanup_files(file_paths: List[str], logger: Optional[logging.Logger] = None) -> int:
+        """
+        指定されたファイルパスのリストをクリーンアップ（静的メソッド）
+        
+        Args:
+            file_paths: 削除するファイルパスのリスト
+            logger: ログ出力用のロガー（Noneの場合はデフォルトロガーを使用）
+            
+        Returns:
+            int: 削除したファイル数
+        """
+        if logger is None:
+            logger = get_logger("file_utils")
+        
+        deleted_count = 0
+        
+        for file_path in file_paths:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    deleted_count += 1
+                    logger.debug(f"一時ファイル削除: {file_path}")
+            except Exception as e:
+                logger.warning(f"一時ファイル削除失敗: {file_path} - {str(e)}")
+        
+        if deleted_count > 0:
+            logger.info(f"一時ファイルクリーンアップ完了: {deleted_count}ファイル削除")
+        
+        return deleted_count
+    
     def get_file_type(self, file_path: str) -> str:
         """
         ファイルタイプを判定

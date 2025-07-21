@@ -366,7 +366,7 @@ def _load_minutes_prompt() -> str:
     
     try:
         # プロンプトファイルから読み込みを試行
-        from ...prompts.minutes_generation import get_minutes_prompt
+        from src.prompts.minutes_generation import get_minutes_prompt
         return get_minutes_prompt()
     except ImportError:
         # プロンプトモジュールが未実装の場合はデフォルトを使用
@@ -397,7 +397,7 @@ def _load_summary_prompt() -> str:
     
     try:
         # プロンプトファイルから読み込みを試行
-        from ...prompts.minutes_generation import get_summary_prompt
+        from src.prompts.minutes_generation import get_summary_prompt
         return get_summary_prompt()
     except ImportError:
         # プロンプトモジュールが未実装の場合はデフォルトを使用

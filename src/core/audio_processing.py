@@ -228,52 +228,48 @@ class AudioProcessor:
         except Exception as e:
             raise FileProcessingError(f"音声正規化に失敗: {str(e)}")
     
-    def extract_audio_from_video(self, video_path: str, output_path: Optional[str] = None) -> str:
+    def split_audio_into_chunks(self, file_path: str, chunk_duration: int = 600) -> List[str]:
         """
-        動画ファイルから音声を抽出
+        音声ファイルを指定された長さのチャンクに分割してファイルに保存
         
         Args:
-            video_path: 動画ファイルパス
-            output_path: 出力音声ファイルパス
+            file_path: 分割する音声ファイルのパス
+            chunk_duration: チャンクの長さ（秒）
             
         Returns:
-            str: 抽出された音声ファイルのパス
+            List[str]: 分割されたチャンクファイルのパスリスト
         """
         try:
-            if output_path is None:
-                # 一時ファイルを作成
-                temp_fd, output_path = tempfile.mkstemp(suffix='.wav')
-                os.close(temp_fd)
+            self.logger.info(f"音声ファイルをチャンクに分割開始: {file_path}")
             
-            self.logger.info(f"音声抽出開始: {video_path} -> {output_path}")
+            # 音声ファイルを読み込み
+            audio = self.load_audio(file_path)
             
-            (
-                ffmpeg
-                .input(video_path)
-                .output(output_path, acodec='pcm_s16le', ac=1, ar='16000')
-                .overwrite_output()
-                .run(quiet=True)
-            )
+            # 音声を分割
+            chunks = self.split_audio(audio, chunk_duration)
             
-            self.logger.info("音声抽出完了")
-            return output_path
+            # 一時ディレクトリを作成
+            temp_dir = tempfile.mkdtemp(prefix="stt_audio_chunks_")
+            
+            # チャンクをファイルに保存
+            base_name = Path(file_path).stem
+            chunk_files = self.save_audio_chunks(chunks, temp_dir, base_name)
+            
+            self.logger.info(f"音声チャンク分割完了: {len(chunk_files)}個のファイル")
+            return chunk_files
             
         except Exception as e:
-            raise FileProcessingError(f"音声抽出に失敗: {str(e)}")
+            raise FileProcessingError(f"音声チャンク分割に失敗: {str(e)}")
     
-    def cleanup_temp_files(self, file_paths: List[str]) -> None:
+    def cleanup_temp_files(self, file_paths: List[str]) -> int:
         """
         一時ファイルのクリーンアップ
         
         Args:
             file_paths: 削除するファイルパスのリスト
+            
+        Returns:
+            int: 削除したファイル数
         """
-        for file_path in file_paths:
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    self.logger.debug(f"一時ファイル削除: {file_path}")
-            except Exception as e:
-                self.logger.warning(f"一時ファイル削除失敗: {file_path} - {str(e)}")
-        
-        self.logger.info(f"一時ファイルクリーンアップ完了: {len(file_paths)}ファイル")
+        from .file_utils import FileUtils
+        return FileUtils.cleanup_files(file_paths, self.logger)

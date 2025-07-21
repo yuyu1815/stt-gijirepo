@@ -28,14 +28,7 @@ class VideoProcessor:
     
     def __init__(self):
         self.logger = get_logger(__name__)
-        self._validate_dependencies()
-    
-    def _validate_dependencies(self) -> None:
-        """必要な依存関係の確認"""
-        try:
-            ffmpeg.probe
-        except Exception:
-            raise FileProcessingError("FFmpegが見つかりません。FFmpegをインストールしてください。")
+
     
     def get_video_metadata(self, file_path: str) -> Dict[str, Any]:
         """
@@ -383,19 +376,15 @@ class VideoProcessor:
         except Exception:
             return False
     
-    def cleanup_temp_files(self, file_paths: list[str]) -> None:
+    def cleanup_temp_files(self, file_paths: list[str]) -> int:
         """
         一時ファイルのクリーンアップ
         
         Args:
             file_paths: 削除するファイルパスのリスト
+            
+        Returns:
+            int: 削除したファイル数
         """
-        for file_path in file_paths:
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    self.logger.debug(f"一時ファイル削除: {file_path}")
-            except Exception as e:
-                self.logger.warning(f"一時ファイル削除失敗: {file_path} - {str(e)}")
-        
-        self.logger.info(f"一時ファイルクリーンアップ完了: {len(file_paths)}ファイル")
+        from .file_utils import FileUtils
+        return FileUtils.cleanup_files(file_paths, self.logger)

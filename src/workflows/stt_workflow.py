@@ -12,8 +12,8 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 
-from .state import STTState, create_initial_state
-from .nodes import (
+from src.workflows.state import STTState, create_initial_state
+from src.workflows.nodes import (
     analyze_file_node,
     process_video_node,
     split_audio_node,
@@ -22,8 +22,13 @@ from .nodes import (
     generate_minutes_node,
     upload_notion_node
 )
-from ..utils import get_logger
-from ..utils.logging_config import LogContext
+from src.workflows.nodes.split_media import split_media_node
+from src.workflows.nodes.generate_chunk_minutes_from_media import generate_chunk_minutes_from_media_node
+from src.workflows.nodes.generate_chunk_minutes_from_text import generate_chunk_minutes_from_text_node
+from src.workflows.nodes.combine_chunk_minutes import combine_chunk_minutes_node
+from src.workflows.nodes.refine_final_minutes import refine_final_minutes_node
+from src.utils import get_logger
+from src.utils.logging_config import LogContext
 
 
 def create_stt_workflow() -> StateGraph:
@@ -46,34 +51,31 @@ def create_stt_workflow() -> StateGraph:
     workflow.add_node("notion_upload", upload_notion_node)
     workflow.add_node("error_handler", error_handler_node)
     
+    # 新しいワークフロー用のノードを追加
+    workflow.add_node("split_media", split_media_node)
+    workflow.add_node("generate_chunk_minutes_from_media", generate_chunk_minutes_from_media_node)
+    workflow.add_node("generate_chunk_minutes_from_text", generate_chunk_minutes_from_text_node)
+    workflow.add_node("combine_chunk_minutes", combine_chunk_minutes_node)
+    workflow.add_node("refine_final_minutes", refine_final_minutes_node)
+    
     # エントリーポイントを設定
     workflow.set_entry_point("file_analysis")
     
-    # 条件分岐を定義
+    # 新しいブランチワークフローの条件分岐を定義
     workflow.add_conditional_edges(
         "file_analysis",
         route_after_file_analysis,
         {
-            "video_processing": "video_processing",
-            "audio_splitting": "audio_splitting",
+            "split_media": "split_media",
             "error": "error_handler"
         }
     )
     
     workflow.add_conditional_edges(
-        "video_processing",
-        route_after_video_processing,
+        "split_media",
+        route_after_split_media,
         {
-            "audio_splitting": "audio_splitting",
-            "transcription": "transcription",
-            "error": "error_handler"
-        }
-    )
-    
-    workflow.add_conditional_edges(
-        "audio_splitting",
-        route_after_audio_splitting,
-        {
+            "generate_chunk_minutes_from_media": "generate_chunk_minutes_from_media",
             "transcription": "transcription",
             "error": "error_handler"
         }
@@ -83,6 +85,43 @@ def create_stt_workflow() -> StateGraph:
         "transcription",
         route_after_transcription,
         {
+            "generate_chunk_minutes_from_text": "generate_chunk_minutes_from_text",
+            "error": "error_handler"
+        }
+    )
+    
+    # 両ルートから combine_chunk_minutes へ
+    workflow.add_conditional_edges(
+        "generate_chunk_minutes_from_media",
+        route_after_chunk_minutes_generation,
+        {
+            "combine_chunk_minutes": "combine_chunk_minutes",
+            "error": "error_handler"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "generate_chunk_minutes_from_text",
+        route_after_chunk_minutes_generation,
+        {
+            "combine_chunk_minutes": "combine_chunk_minutes",
+            "error": "error_handler"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "combine_chunk_minutes",
+        route_after_combine_chunk_minutes,
+        {
+            "refine_final_minutes": "refine_final_minutes",
+            "error": "error_handler"
+        }
+    )
+    
+    workflow.add_conditional_edges(
+        "refine_final_minutes",
+        route_after_refine_final_minutes,
+        {
             "quality_check": "quality_check",
             "error": "error_handler"
         }
@@ -91,15 +130,6 @@ def create_stt_workflow() -> StateGraph:
     workflow.add_conditional_edges(
         "quality_check",
         route_after_quality_check,
-        {
-            "minutes_generation": "minutes_generation",
-            "error": "error_handler"
-        }
-    )
-    
-    workflow.add_conditional_edges(
-        "minutes_generation",
-        route_after_minutes_generation,
         {
             "notion_upload": "notion_upload",
             "end": END
@@ -120,9 +150,9 @@ def create_stt_workflow() -> StateGraph:
     return workflow
 
 
-def route_after_file_analysis(state: STTState) -> Literal["video_processing", "audio_splitting", "error"]:
+def route_after_file_analysis(state: STTState) -> Literal["split_media", "error"]:
     """
-    ファイル解析後のルーティング
+    ファイル解析後のルーティング（新しいワークフロー）
     
     Args:
         state: 現在の状態
@@ -136,10 +166,9 @@ def route_after_file_analysis(state: STTState) -> Literal["video_processing", "a
     
     file_type = state.get("file_type")
     
-    if file_type == "video":
-        return "video_processing"
-    elif file_type == "audio":
-        return "audio_splitting"
+    # 新しいワークフローでは全てのファイルをsplit_mediaに送る
+    if file_type in ["video", "audio"]:
+        return "split_media"
     else:
         # 不明なファイル形式の場合はエラー
         state["errors"].append(f"サポートされていないファイル形式: {file_type}")
@@ -190,7 +219,7 @@ def route_after_audio_splitting(state: STTState) -> Literal["transcription", "er
     return "transcription"
 
 
-def route_after_transcription(state: STTState) -> Literal["quality_check", "error"]:
+def route_after_transcription(state: STTState) -> Literal["generate_chunk_minutes_from_text", "error"]:
     """
     文字起こし後のルーティング
     
@@ -210,7 +239,7 @@ def route_after_transcription(state: STTState) -> Literal["quality_check", "erro
         state["errors"].append("文字起こし結果が空です")
         return "error"
     
-    return "quality_check"
+    return "generate_chunk_minutes_from_text"
 
 
 def route_after_quality_check(state: STTState) -> Literal["minutes_generation", "error"]:
@@ -273,6 +302,85 @@ def route_after_notion_upload(state: STTState) -> Literal["end", "error"]:
     return "end"
 
 
+def route_after_split_media(state: STTState) -> Literal["generate_chunk_minutes_from_media", "transcription", "error"]:
+    """
+    メディア分割後のルーティング
+    
+    Args:
+        state: 現在の状態
+        
+    Returns:
+        次のノード名
+    """
+    # エラーチェック
+    if state.get("errors"):
+        return "error"
+    
+    file_type = state.get("file_type")
+    force_video_mode = state.get("force_video_mode", False)
+    
+    # 動画ファイルまたは強制動画モードの場合は動画処理ルートへ
+    if file_type == "video" or force_video_mode:
+        return "generate_chunk_minutes_from_media"
+    else:
+        # 音声処理ルートは文字起こしへ
+        return "transcription"
+
+
+def route_after_chunk_minutes_generation(state: STTState) -> Literal["combine_chunk_minutes", "error"]:
+    """
+    チャンク議事録生成後のルーティング
+    
+    Args:
+        state: 現在の状態
+        
+    Returns:
+        次のノード名
+    """
+    # エラーチェック
+    if state.get("errors"):
+        return "error"
+    
+    # チャンク議事録が生成されたら結合へ
+    return "combine_chunk_minutes"
+
+
+def route_after_combine_chunk_minutes(state: STTState) -> Literal["refine_final_minutes", "error"]:
+    """
+    チャンク議事録結合後のルーティング
+    
+    Args:
+        state: 現在の状態
+        
+    Returns:
+        次のノード名
+    """
+    # エラーチェック
+    if state.get("errors"):
+        return "error"
+    
+    # 結合後は精製へ
+    return "refine_final_minutes"
+
+
+def route_after_refine_final_minutes(state: STTState) -> Literal["quality_check", "error"]:
+    """
+    最終議事録精製後のルーティング
+    
+    Args:
+        state: 現在の状態
+        
+    Returns:
+        次のノード名
+    """
+    # エラーチェック
+    if state.get("errors"):
+        return "error"
+    
+    # 精製後は品質チェックへ
+    return "quality_check"
+
+
 def error_handler_node(state: STTState) -> STTState:
     """
     エラーハンドリングノード
@@ -315,6 +423,7 @@ def execute_stt_workflow(
     file_path: str,
     config: Dict[str, Any],
     upload_to_notion: bool = False,
+    force_video_mode: bool = False,
     checkpointer: Any = None
 ) -> STTState:
     """
@@ -324,6 +433,7 @@ def execute_stt_workflow(
         file_path: 処理対象ファイルパス
         config: システム設定
         upload_to_notion: Notionアップロードフラグ
+        force_video_mode: 音声ファイルを動画処理ルートで強制処理するフラグ
         checkpointer: チェックポイント機能（オプション）
         
     Returns:
@@ -333,7 +443,7 @@ def execute_stt_workflow(
     
     try:
         # 初期状態を作成
-        initial_state = create_initial_state(file_path, config, upload_to_notion)
+        initial_state = create_initial_state(file_path, config, upload_to_notion, force_video_mode)
         
         logger.info(f"STTワークフロー開始: {file_path} (セッション: {initial_state['session_id']})")
         
@@ -375,7 +485,7 @@ def execute_stt_workflow(
         logger.error(f"STTワークフロー実行エラー: {str(e)}", exc_info=True)
         
         # エラー状態を作成
-        error_state = create_initial_state(file_path, config, upload_to_notion)
+        error_state = create_initial_state(file_path, config, upload_to_notion, force_video_mode)
         error_state["errors"].append(f"ワークフロー実行エラー: {str(e)}")
         error_state["final_status"] = "error"
         
@@ -386,7 +496,8 @@ def execute_batch_processing(
     file_paths: list,
     config: Dict[str, Any],
     max_concurrent: int = 3,
-    upload_to_notion: bool = False
+    upload_to_notion: bool = False,
+    force_video_mode: bool = False
 ) -> list:
     """
     複数ファイルの並列処理
@@ -396,6 +507,7 @@ def execute_batch_processing(
         config: システム設定
         max_concurrent: 最大並列数
         upload_to_notion: Notionアップロードフラグ
+        force_video_mode: 音声ファイルを動画処理ルートで強制処理するフラグ
         
     Returns:
         各ファイルの処理結果リスト
@@ -410,7 +522,7 @@ def execute_batch_processing(
     def process_single_file(file_path: str) -> STTState:
         """単一ファイルの処理"""
         try:
-            result = execute_stt_workflow(file_path, config, upload_to_notion)
+            result = execute_stt_workflow(file_path, config, upload_to_notion, force_video_mode)
             
             with results_lock:
                 results.append(result)

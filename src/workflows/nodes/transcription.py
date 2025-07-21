@@ -12,6 +12,7 @@ from pathlib import Path
 from src.workflows.state import STTState
 from src.utils import get_logger, APIError, FileProcessingError, api_call_with_retry
 from src.utils.logging_config import log_state_transition, LogContext
+from src.core.ai_services import GeminiService
 
 # Gemini API
 from google import genai
@@ -55,7 +56,7 @@ def transcribe_node(state: STTState) -> STTState:
             ctx.log_progress(f"Gemini API設定完了: {model_name}")
             
             # チャンクファイルを取得
-            chunks = state.get("chunks", [state["file_path"]])
+            chunks = state.get("media_chunks") or state.get("chunks", [state["file_path"]])
             chunk_durations = state.get("chunk_durations", [state.get("audio_duration", 0)])
             
             ctx.log_progress(f"処理対象: {len(chunks)}個のファイル")
@@ -67,9 +68,11 @@ def transcribe_node(state: STTState) -> STTState:
                 confidence = 0.8  # デフォルト信頼度
             else:
                 # 複数チャンクの並列処理
-                transcription, confidence = _transcribe_multiple_chunks(
+                transcription, confidence, chunk_transcriptions = _transcribe_multiple_chunks(
                     chunks, chunk_durations, model_name, api_key
                 )
+                # 個別のチャンク文字起こし結果も保存
+                state["chunk_transcriptions"] = chunk_transcriptions
             
             state["transcription"] = transcription
             state["transcription_confidence"] = confidence
@@ -215,7 +218,7 @@ def _transcribe_multiple_chunks(
             transcriptions.append(chunk_results[i])
             
             # 時間情報を追加
-            duration = durations[i] if i < len(durations) else 0
+            duration = durations[i] if durations and i < len(durations) else 0
             chunk_times.append((current_time, current_time + duration))
             current_time += duration
     
@@ -223,7 +226,7 @@ def _transcribe_multiple_chunks(
     combined_transcription = _combine_transcriptions(transcriptions, chunk_times)
     average_confidence = sum(confidences) / len(confidences) if confidences else 0.0
     
-    return combined_transcription, average_confidence
+    return combined_transcription, average_confidence, transcriptions
 
 
 def _combine_transcriptions(transcriptions: List[str], chunk_times: List[tuple] = None) -> str:
@@ -264,8 +267,17 @@ def _load_transcription_prompt() -> str:
     Returns:
         プロンプト文字列
     """
-    # デフォルトプロンプト
-    default_prompt = """以下の音声ファイルを議事録用に文字起こししてください。
+    try:
+        # プロンプトローダーを使用して外部ファイルから読み込み
+        from src.utils.prompt_loader import PromptLoader
+        loader = PromptLoader()
+        return loader.load_prompt("transcription", "detailed_transcription")
+    except Exception as e:
+        # フォールバック用のデフォルトプロンプト
+        logger = get_logger("transcription")
+        logger.warning(f"外部プロンプトファイルの読み込みに失敗、デフォルトを使用: {str(e)}")
+        
+        return """以下の音声ファイルを議事録用に文字起こししてください。
 
 注意事項:
 - 日本語の音声です。正確に文字起こししてください。
@@ -281,16 +293,7 @@ def _load_transcription_prompt() -> str:
 - コードが記述されている場合それを議事録に記述してください。
 - コードの場合は以下のようにしてください：
   Aさん：文字起こし
-  コード ```コードの中身```
-"""
-    
-    try:
-        # プロンプトファイルから読み込みを試行
-        from ...prompts.transcription import get_transcription_prompt
-        return get_transcription_prompt()
-    except ImportError:
-        # プロンプトモジュールが未実装の場合はデフォルトを使用
-        return default_prompt
+  コード ```コードの中身```"""
 
 
 def _generate_content_with_retry(model, contents: list, max_retries: int = 5):

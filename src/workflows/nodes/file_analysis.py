@@ -13,6 +13,8 @@ from pydub import AudioSegment
 from src.workflows.state import STTState
 from src.utils import get_logger, FileProcessingError
 from src.utils.logging_config import log_state_transition, LogContext
+from src.core.audio_processing import AudioProcessor
+from src.core.file_utils import FileUtils
 
 # OpenCVのインポートを試行（オプション）
 try:

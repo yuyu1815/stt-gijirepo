@@ -11,10 +11,11 @@ from datetime import datetime
 from src.workflows.state import STTState
 from src.utils import get_logger, NotionUploadError, api_call_with_retry
 from src.utils.logging_config import log_state_transition, LogContext
+from src.core.notion_client import NotionClient
 
 # Notion APIのインポートを試行
 try:
-    from notion_client import Client as NotionClient
+    from notion_client import Client as NotionAPIClient
     HAS_NOTION = True
 except ImportError:
     HAS_NOTION = False
@@ -120,7 +121,7 @@ def _initialize_notion_client(settings: Dict[str, Any]) -> NotionClient:
         raise NotionUploadError("Notionトークンが設定されていません")
     
     try:
-        client = NotionClient(auth=notion_token)
+        client = NotionAPIClient(auth=notion_token)
         return client
     except Exception as e:
         raise NotionUploadError(f"Notionクライアントの初期化に失敗しました: {str(e)}")

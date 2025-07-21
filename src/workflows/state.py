@@ -34,6 +34,12 @@ class STTState(TypedDict):
     chunk_durations: Optional[List[float]]
     processing_stage: str
     
+    # 新しいワークフロー用の状態
+    media_chunks: Optional[List[str]]  # 分割されたメディアチャンクのパスリスト
+    chunk_transcriptions: Optional[List[str]]  # 音声ルートでのみ使用
+    chunk_minutes: Optional[List[str]]  # 両ルートで生成され、結合される
+    combined_minutes_text: Optional[str]  # 結合された中間議事録
+    
     # AI処理結果
     transcription: Optional[str]
     transcription_confidence: Optional[float]
@@ -52,6 +58,7 @@ class STTState(TypedDict):
     
     # 設定・フラグ
     upload_to_notion: bool
+    force_video_mode: bool
     notion_database_id: Optional[str]
     notion_page_id: Optional[str]
     
@@ -92,7 +99,8 @@ class STTConfig(TypedDict):
 def create_initial_state(
     file_path: str,
     config: STTConfig,
-    upload_to_notion: bool = False
+    upload_to_notion: bool = False,
+    force_video_mode: bool = False
 ) -> STTState:
     """初期状態を作成する関数"""
     import uuid
@@ -122,6 +130,12 @@ def create_initial_state(
         chunk_durations=None,
         processing_stage="initialized",
         
+        # 新しいワークフロー用の状態
+        media_chunks=None,
+        chunk_transcriptions=None,
+        chunk_minutes=None,
+        combined_minutes_text=None,
+        
         # AI処理結果
         transcription=None,
         transcription_confidence=None,
@@ -140,6 +154,7 @@ def create_initial_state(
         
         # 設定・フラグ
         upload_to_notion=upload_to_notion,
+        force_video_mode=force_video_mode,
         notion_database_id=config.get("notion_database_id"),
         notion_page_id=None,
         

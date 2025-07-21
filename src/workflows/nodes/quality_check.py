@@ -446,7 +446,17 @@ def _load_hallucination_check_prompt() -> str:
     Returns:
         プロンプト文字列
     """
-    default_prompt = """以下の文字起こし結果について、ハルシネーション（幻覚・誤認識）の可能性を検証してください。
+    try:
+        # プロンプトローダーを使用して外部ファイルから読み込み
+        from src.utils.prompt_loader import PromptLoader
+        loader = PromptLoader()
+        return loader.load_prompt("quality_check", "detailed_hallucination_check")
+    except Exception as e:
+        # フォールバック用のデフォルトプロンプト
+        logger = get_logger("quality_check")
+        logger.warning(f"外部プロンプトファイルの読み込みに失敗、デフォルトを使用: {str(e)}")
+        
+        return """以下の文字起こし結果について、ハルシネーション（幻覚・誤認識）の可能性を検証してください。
 
 検証項目:
 1. 音声から実際に聞こえるはずのない内容が含まれていないか
@@ -458,16 +468,7 @@ def _load_hallucination_check_prompt() -> str:
 以下の形式で回答してください:
 ハルシネーションスコア: [0.0-1.0の数値]
 検出された問題: [問題のリスト]
-信頼度: [0.0-1.0の数値]
-"""
-    
-    try:
-        # プロンプトファイルから読み込みを試行
-        from ...prompts.quality_check import get_hallucination_check_prompt
-        return get_hallucination_check_prompt()
-    except ImportError:
-        # プロンプトモジュールが未実装の場合はデフォルトを使用
-        return default_prompt
+信頼度: [0.0-1.0の数値]"""
 
 
 def _parse_hallucination_response(response_text: str) -> Dict[str, Any]:
