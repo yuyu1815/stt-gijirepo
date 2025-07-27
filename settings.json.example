@@ -3,6 +3,11 @@
   
   "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE",
   "gemini_model": "gemini-1.5-pro",
+  "gemini_models": {
+    "transcription": "gemini-1.5-flash",
+    "minutes_generation": "gemini-1.5-pro",
+    "summarization": "gemini-1.5-pro"
+  },
   "notion_token": "YOUR_NOTION_TOKEN_HERE",
   "notion_database_id": "YOUR_NOTION_DATABASE_ID_HERE",
   
@@ -10,6 +15,7 @@
   "chunk_size": 600,
   "max_retries": 5,
   "retry_delay": 2.0,
+  "retry_delay_description": "APIレート制限エラー(429)の場合、APIからの指定遅延時間が優先されます",
   
   "min_confidence_threshold": 0.7,
   "enable_quality_check": true,
@@ -18,6 +24,18 @@
   "output_format": "markdown",
   "include_timestamps": true,
   "include_speaker_labels": false,
+  
+  "prompt_types": {
+    "_comment": "プロンプトタイプの設定（ユーザーフレンドリーな名前からファイル名へのマッピング）",
+    "会議": {
+      "file": "meeting_prompts_ja.md",
+      "internal_id": "meeting"
+    },
+    "授業": {
+      "file": "school_prompts_ja.md",
+      "internal_id": "school"
+    }
+  },
   
   "app": {
     "language": "ja"

@@ -372,13 +372,19 @@ class TestPromptLoading:
         assert isinstance(result, str)
         assert len(result) > 0  # Should return default prompt
 
-    @patch('builtins.open', mock_open(read_data="Test summary prompt template"))
-    @patch('os.path.exists', return_value=True)
-    def test_load_summary_prompt_success(self, mock_exists):
+    @patch('src.utils.prompt_loader.load_and_render_prompt', return_value="Test summary prompt template")
+    def test_load_summary_prompt_success(self, mock_load_prompt):
         """Test successful summary prompt loading"""
         result = _load_summary_prompt()
         
+        # Verify the result
         assert result == "Test summary prompt template"
+        
+        # Verify that load_and_render_prompt was called with the correct parameters
+        mock_load_prompt.assert_called_once_with(
+            category="minutes",
+            prompt_name="generation_summary"
+        )
 
     @patch('builtins.open', side_effect=IOError("Permission denied"))
     @patch('os.path.exists', return_value=True)

@@ -10,6 +10,7 @@ from datetime import datetime
 from src.core.ai_services import GeminiService
 from src.utils import get_logger
 from src.utils.retry_utils import with_retry
+from src.utils.prompt_loader import load_and_render_prompt
 from src.workflows.state import STTState
 
 
@@ -139,8 +140,8 @@ def _ai_enhance_combined_minutes(gemini_service: GeminiService, basic_combined: 
         # 結合・品質向上プロンプトを作成
         prompt = _create_combine_enhancement_prompt(basic_combined, state)
         
-        # AIによる結合・品質向上
-        enhanced_text = gemini_service.generate_minutes_from_text(prompt)
+        # AIによる結合・品質向上（要約タスクとして実行）
+        enhanced_text = gemini_service.generate_minutes_from_text(prompt, task="summarization")
         
         if not enhanced_text or enhanced_text.strip() == "":
             logger.warning("AI結合処理で空の結果が返されました")
@@ -168,32 +169,11 @@ def _create_combine_enhancement_prompt(basic_combined: str, state: STTState) -> 
     original_filename = state.get("original_filename", "不明なファイル")
     processing_route = "動画処理ルート" if state.get("force_video_mode") or state.get("file_type") == "video" else "音声処理ルート"
     
-    return f"""
-以下は複数のチャンクから生成された議事録の中間版です。これを統合・改善して、より読みやすく一貫性のある最終的な議事録を作成してください。
-
-【処理情報】
-- ファイル名: {original_filename}
-- 処理ルート: {processing_route}
-
-【中間議事録】
-{basic_combined}
-
-以下の点に注意して議事録を改善してください：
-
-1. **一貫性の確保**: チャンク間で重複する内容を統合し、矛盾を解決
-2. **構造の改善**: 論理的な流れに沿って内容を再構成
-3. **重要度の整理**: 重要な決定事項やアクションアイテムを明確に強調
-4. **読みやすさの向上**: 見出し構造を最適化し、箇条書きを効果的に使用
-5. **時系列の整理**: 議論の流れを時系列で整理
-6. **発言者の統一**: 同一人物の発言を適切に統合
-7. **要約の追加**: 全体の要約を冒頭に追加
-
-出力形式：
-- Markdown形式で出力
-- 適切な見出し構造（H1, H2, H3）を使用
-- 重要な部分は太字で強調
-- 決定事項やアクションアイテムは別セクションで整理
-- チャンク番号は削除し、内容に基づいた適切な見出しに変更
-
-元の情報を失わないよう注意しながら、読みやすく実用的な議事録を作成してください。
-"""
+    # プロンプトローダーを使用してプロンプトを読み込み、レンダリング
+    return load_and_render_prompt(
+        category="minutes",
+        prompt_name="combine_enhancement",
+        original_filename=original_filename,
+        processing_route=processing_route,
+        basic_combined=basic_combined
+    )

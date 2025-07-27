@@ -4,15 +4,16 @@ STT議事録システム - メインワークフロー定義
 LangGraphを使用したSTT議事録システムのメインワークフロー
 """
 
-from typing import Dict, Any, Literal
+from typing import Dict, Any, Literal, Optional, cast
 
 # LangGraphのインポートを試行
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables.config import RunnableConfig
 
 
-from src.workflows.state import STTState, create_initial_state
+from src.workflows.state import STTState, STTConfig, create_initial_state
 from src.workflows.nodes import (
     analyze_file_node,
     process_video_node,
@@ -34,13 +35,13 @@ from src.utils.logging_config import LogContext
 def create_stt_workflow() -> StateGraph:
     """
     STTワークフローを作成
-    
+
     Returns:
         構築されたワークフローグラフ
     """
     # ワークフローグラフを初期化
     workflow = StateGraph(STTState)
-    
+
     # ノードを追加
     workflow.add_node("file_analysis", analyze_file_node)
     workflow.add_node("video_processing", process_video_node)
@@ -50,7 +51,7 @@ def create_stt_workflow() -> StateGraph:
     workflow.add_node("minutes_generation", generate_minutes_node)
     workflow.add_node("notion_upload", upload_notion_node)
     workflow.add_node("error_handler", error_handler_node)
-    
+
     # 新しいワークフロー用のノードを追加
     workflow.add_node("split_media", split_media_node)
     workflow.add_node("generate_chunk_minutes_from_media", generate_chunk_minutes_from_media_node)
@@ -421,7 +422,7 @@ def error_handler_node(state: STTState) -> STTState:
 
 def execute_stt_workflow(
     file_path: str,
-    config: Dict[str, Any],
+    config: STTConfig,
     upload_to_notion: bool = False,
     force_video_mode: bool = False,
     checkpointer: Any = None
@@ -458,9 +459,12 @@ def execute_stt_workflow(
         
         # ワークフローを実行
         config_dict = {"configurable": {"thread_id": initial_state["session_id"]}}
+        runnable_config = cast(Optional[RunnableConfig], config_dict)
         
         final_state = None
-        for state in app.stream(initial_state, config_dict):
+        # Cast initial_state to Any to satisfy type checker
+        initial_state_any = cast(Any, initial_state)
+        for state in app.stream(initial_state_any, runnable_config):
             final_state = state
             # 進捗ログ
             current_stage = list(state.keys())[0] if state else "unknown"
@@ -494,7 +498,7 @@ def execute_stt_workflow(
 
 def execute_batch_processing(
     file_paths: list,
-    config: Dict[str, Any],
+    config: STTConfig,
     max_concurrent: int = 3,
     upload_to_notion: bool = False,
     force_video_mode: bool = False
@@ -596,7 +600,7 @@ def get_workflow_status(state: STTState) -> Dict[str, Any]:
     }
 
 
-def validate_workflow_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def validate_workflow_config(config: STTConfig) -> Dict[str, Any]:
     """
     ワークフロー設定を検証
     

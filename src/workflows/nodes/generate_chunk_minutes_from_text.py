@@ -57,7 +57,7 @@ def generate_chunk_minutes_from_text_node(state: STTState) -> STTState:
         # 並列処理で各チャンクを処理
         with ThreadPoolExecutor(max_workers=3) as executor:
             future_to_chunk = {
-                executor.submit(_process_text_chunk, gemini_service, transcription_text, i + 1): i
+                executor.submit(_process_text_chunk, gemini_service, transcription_text, i + 1, state): i
                 for i, transcription_text in enumerate(chunk_transcriptions)
             }
             
@@ -98,7 +98,7 @@ def generate_chunk_minutes_from_text_node(state: STTState) -> STTState:
 
 
 @with_retry(max_retries=3, backoff_factor=2.0)
-def _process_text_chunk(gemini_service: GeminiService, transcription_text: str, chunk_number: int) -> str:
+def _process_text_chunk(gemini_service: GeminiService, transcription_text: str, chunk_number: int, state: STTState = None) -> str:
     """
     単一のテキストチャンクを処理して議事録を生成
     
@@ -106,6 +106,7 @@ def _process_text_chunk(gemini_service: GeminiService, transcription_text: str, 
         gemini_service: Geminiサービスインスタンス
         transcription_text: 文字起こしテキスト
         chunk_number: チャンク番号
+        state: 処理状態
         
     Returns:
         生成された議事録テキスト
@@ -119,9 +120,9 @@ def _process_text_chunk(gemini_service: GeminiService, transcription_text: str, 
         if not transcription_text or transcription_text.strip() == "":
             return f"[チャンク {chunk_number}: 文字起こし内容が空のため議事録を生成できませんでした]"
         
-        # テキストから議事録を生成
-        prompt = _create_text_minutes_prompt(chunk_number, transcription_text)
-        minutes_text = gemini_service.generate_minutes_from_text(prompt)
+        # テキストから議事録を生成（議事録生成タスクとして実行）
+        prompt = _create_text_minutes_prompt(chunk_number, transcription_text, state)
+        minutes_text = gemini_service.generate_minutes_from_text(prompt, task="minutes_generation")
         
         if not minutes_text or minutes_text.strip() == "":
             return f"[チャンク {chunk_number}: 議事録を生成できませんでした]"
@@ -137,49 +138,31 @@ def _process_text_chunk(gemini_service: GeminiService, transcription_text: str, 
         raise
 
 
-def _create_text_minutes_prompt(chunk_number: int, transcription_text: str) -> str:
+def _create_text_minutes_prompt(chunk_number: int, transcription_text: str, state: STTState = None) -> str:
     """
     テキストチャンク用の議事録生成プロンプトを作成
     
     Args:
         chunk_number: チャンク番号
         transcription_text: 文字起こしテキスト
+        state: 処理状態（設定情報を取得するため）
         
     Returns:
         プロンプトテキスト
     """
-    try:
-        # プロンプトローダーを使用して外部ファイルから読み込み
-        from src.utils.prompt_loader import PromptLoader
-        loader = PromptLoader()
-        template = loader.load_prompt("minutes_generation", "chunk_text_minutes")
-        return template.format(chunk_number=chunk_number, transcription_text=transcription_text)
-    except Exception as e:
-        # フォールバック用のデフォルトプロンプト
-        from src.utils import get_logger
-        logger = get_logger("chunk_minutes_text")
-        logger.warning(f"外部プロンプトファイルの読み込みに失敗、デフォルトを使用: {str(e)}")
-        
-        return f"""
-以下の文字起こしテキスト（チャンク {chunk_number}）から議事録を生成してください。
+    # プロンプトローダーを使用して外部ファイルから読み込み
+    from src.prompts.minutes_generation import MinutesGenerationPrompts, MinutesFormat
 
-【文字起こしテキスト】
-{transcription_text}
+    # 設定タイプを取得（"会議" または "授業"）
+    setting_type = None
+    if state and "settings" in state:
+        setting_type = state["settings"].get("prompt_type")
 
-以下の点に注意して議事録を作成してください：
-
-1. **内容の要約**: 話し合われた主要なトピックや議題を明確に記載
-2. **発言者の識別**: 可能な限り発言者を特定し、発言内容を整理
-3. **重要な決定事項**: 決定された事項や合意点を明確に記載
-4. **アクションアイテム**: 今後の行動項目や担当者があれば記載
-5. **時系列の整理**: 議論の流れを時系列で整理
-6. **文字起こしの修正**: 明らかな誤字脱字や不自然な表現は適切に修正
-
-出力形式：
-- Markdown形式で出力
-- 見出しや箇条書きを適切に使用
-- 重要な部分は太字で強調
-- 文字起こしの生テキストは含めず、整理された議事録のみを出力
-
-このチャンクの内容のみを対象とし、他のチャンクの内容は含めないでください。
-"""
+    # 詳細議事録プロンプトを使用し、チャンク番号と文字起こしテキストをカスタム指示として渡す
+    template = MinutesGenerationPrompts.get_minutes_prompt(
+        format_type=MinutesFormat.DETAILED,
+        language="ja", # またはstateから言語を取得
+        custom_instructions=f"以下の文字起こしテキスト（チャンク {chunk_number}）から議事録を生成してください。\n\n【文字起こしテキスト】\n{transcription_text}\n\nこのチャンクの内容のみを対象とし、他のチャンクの内容は含めないでください。",
+        setting_type=setting_type
+    )
+    return template

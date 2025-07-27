@@ -150,12 +150,14 @@ class TestTranscribeNode:
                 settings={
                     "gemini_api_key": "test_key",
                     "gemini_model": "gemini-1.5-flash"
-                }
+                },
+                file_path="/test/audio.wav",
+                chunks=["/test/audio.wav"]  # Ensure chunks is not None
             )
             result = transcribe_node(state)
             
             mock_transcribe.assert_called_once_with(
-                "/test/audio.wav", "gemini-1.5-flash", "test_key"
+                "/test/audio.wav", "gemini-1.5-flash", "test_key", state["settings"]
             )
 
 

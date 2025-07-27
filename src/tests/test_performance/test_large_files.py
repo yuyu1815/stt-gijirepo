@@ -117,11 +117,11 @@ class TestLargeFileProcessing:
         # Create initial state
         initial_state = create_initial_state(
             file_path=large_audio_file,
-            settings=performance_settings
+            config=performance_settings
         )
         
         # Execute workflow
-        result = execute_stt_workflow(initial_state)
+        result = execute_stt_workflow(large_audio_file, performance_settings)
         
         end_time = time.time()
         processing_time = end_time - start_time
@@ -147,11 +147,11 @@ class TestLargeFileProcessing:
         # Create initial state
         initial_state = create_initial_state(
             file_path=very_large_audio_file,
-            settings=performance_settings
+            config=performance_settings
         )
         
         # Execute workflow
-        result = execute_stt_workflow(initial_state)
+        result = execute_stt_workflow(very_large_audio_file, performance_settings)
         
         end_time = time.time()
         processing_time = end_time - start_time
@@ -175,11 +175,11 @@ class TestLargeFileProcessing:
         # Create initial state
         initial_state = create_initial_state(
             file_path=large_audio_file,
-            settings=performance_settings
+            config=performance_settings
         )
         
         # Execute workflow
-        result = execute_stt_workflow(initial_state)
+        result = execute_stt_workflow(large_audio_file, performance_settings)
         
         # Get final memory usage
         final_memory = process.memory_info().rss / 1024 / 1024  # MB
@@ -205,9 +205,9 @@ class TestLargeFileProcessing:
         def process_file(file_path, settings):
             initial_state = create_initial_state(
                 file_path=file_path,
-                settings=settings.copy()
+                config=settings.copy()
             )
-            result = execute_stt_workflow(initial_state)
+            result = execute_stt_workflow(file_path, settings.copy())
             results.append(result)
         
         # Start concurrent processing
@@ -250,11 +250,11 @@ class TestLargeFileProcessing:
         # Create initial state
         initial_state = create_initial_state(
             file_path=large_audio_file,
-            settings=performance_settings
+            config=performance_settings
         )
         
         # Execute workflow
-        result = execute_stt_workflow(initial_state)
+        result = execute_stt_workflow(large_audio_file, performance_settings)
         
         end_time = time.time()
         processing_time = end_time - start_time
@@ -284,11 +284,11 @@ class TestLargeFileProcessing:
         # Create initial state
         initial_state = create_initial_state(
             file_path=large_audio_file,
-            settings=performance_settings
+            config=performance_settings
         )
         
         # Execute workflow
-        result = execute_stt_workflow(initial_state)
+        result = execute_stt_workflow(large_audio_file, performance_settings)
         
         # Get final disk usage
         disk_usage_after = psutil.disk_usage(tempfile.gettempdir())
@@ -326,11 +326,11 @@ class TestLargeFileProcessing:
         # Create initial state
         initial_state = create_initial_state(
             file_path=large_audio_file,
-            settings=performance_settings
+            config=performance_settings
         )
         
         # Execute workflow
-        result = execute_stt_workflow(initial_state)
+        result = execute_stt_workflow(large_audio_file, performance_settings)
         
         end_time = time.time()
         processing_time = end_time - start_time
@@ -371,11 +371,11 @@ class TestLargeFileProcessing:
             # Create initial state
             initial_state = create_initial_state(
                 file_path=large_audio_file,
-                settings=settings
+                config=settings
             )
             
             # Execute workflow
-            result = execute_stt_workflow(initial_state)
+            result = execute_stt_workflow(large_audio_file, settings)
             
             end_time = time.time()
             processing_time = end_time - start_time
@@ -413,11 +413,11 @@ class TestLargeFileProcessing:
             # Create initial state
             initial_state = create_initial_state(
                 file_path=large_audio_file,
-                settings=performance_settings.copy()
+                config=performance_settings.copy()
             )
             
             # Execute workflow
-            result = execute_stt_workflow(initial_state)
+            result = execute_stt_workflow(large_audio_file, performance_settings.copy())
             
             # Verify successful processing
             assert "minutes" in result
@@ -468,10 +468,10 @@ class TestLargeFileProcessing:
         # Create initial state and execute workflow
         initial_state = create_initial_state(
             file_path=large_audio_file,
-            settings=performance_settings
+            config=performance_settings
         )
         
-        result = execute_stt_workflow(initial_state)
+        result = execute_stt_workflow(large_audio_file, performance_settings)
         
         # Wait for monitoring to complete
         monitor_thread.join()
@@ -511,11 +511,11 @@ class TestLargeFileProcessing:
                 # Create initial state
                 initial_state = create_initial_state(
                     file_path=temp_file,
-                    settings=performance_settings.copy()
+                    config=performance_settings.copy()
                 )
                 
                 # Execute workflow
-                result = execute_stt_workflow(initial_state)
+                result = execute_stt_workflow(temp_file, performance_settings.copy())
                 
                 end_time = time.time()
                 processing_time = end_time - start_time

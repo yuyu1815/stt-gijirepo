@@ -110,7 +110,44 @@ stt-gijirepo/
 - Code formatting with **Black**
 - Import organization with **isort**
 
-### 3.2 Node Implementation Conventions
+### 3.2 Code Generality and Testability
+
+- **Avoid Test-Specific Code**: Do not write code that only works in test environments or has special cases just for tests
+- **Design for Production First**: All code should be designed to work in production environments
+- **Use Dependency Injection**: Instead of hardcoding test-specific behaviors, use dependency injection to modify behavior in tests
+- **Separate Test Utilities**: Keep test utilities in test directories, not in production code
+
+#### Examples to Avoid
+
+```python
+def process_audio(file_path):
+    # BAD: Special case just for tests
+    if 'test.mp3' in file_path:
+        return AudioSegment.silent(duration=2000)
+    
+    # Normal processing for production
+    return AudioSegment.from_file(file_path)
+```
+
+#### Better Alternatives
+
+```python
+# Production code - no test-specific logic
+def process_audio(file_path):
+    return AudioSegment.from_file(file_path)
+
+# In test file
+@patch('module.AudioSegment.from_file')
+def test_process_audio(mock_from_file):
+    # Mock the dependency for testing
+    mock_from_file.return_value = AudioSegment.silent(duration=2000)
+    result = process_audio('any_file.mp3')
+    assert len(result) == 2000
+```
+
+This approach keeps production code clean and focused on real-world use cases while allowing tests to properly control dependencies.
+
+### 3.3 Node Implementation Conventions
 ```python
 def node_function(state: STTState) -> STTState:
     """
@@ -122,16 +159,17 @@ def node_function(state: STTState) -> STTState:
     Returns:
         Updated processing state
     """
-    try:
-        # Processing logic
-        state["processing_log"].append("Processing completed message")
+    # Processing logic
+    if error_condition:
+        state["errors"].append("Error message")
         return state
-    except Exception as e:
-        state["errors"].append(f"Error message: {str(e)}")
-        return state
+        
+    # Main processing
+    state["processing_log"].append("Processing completed message")
+    return state
 ```
 
-### 3.3 State Management Conventions
+### 3.4 State Management Conventions
 ```python
 class STTState(TypedDict):
     # Input information
@@ -187,13 +225,21 @@ class STTState(TypedDict):
 ```python
 def with_retry(func, max_retries: int = 5, backoff_factor: float = 2.0):
     """Retry functionality with exponential backoff"""
+    last_error = None
     for attempt in range(max_retries):
-        try:
-            return func()
-        except Exception as e:
-            if attempt == max_retries - 1:
-                raise e
-            time.sleep(backoff_factor ** attempt)
+        if attempt > 0:
+            # Sleep with exponential backoff before retrying
+            time.sleep(backoff_factor ** (attempt - 1))
+        
+        # Attempt to execute the function
+        result = func()
+        if result is not None:
+            return result
+            
+    # If we've exhausted all retries, raise the last error
+    if last_error:
+        raise last_error
+    return None
 ```
 
 ## 6. Test Setup and Execution
@@ -228,13 +274,51 @@ make test-integration
 python -m pytest src/tests/test_workflows/ -v
 
 # Execute specific test file
-python -m pytest src/tests/test_core/test_ai_services.py -v
+python -m pytest src/tests/test_core/test_audio_processing.py -v
 
 # Execute specific test method
-python -m pytest src/tests/test_core/test_ai_services.py::TestGeminiService::test_init_success -v
+python -m pytest src/tests/test_core/test_audio_processing.py::TestAudioProcessor::test_load_audio_mp3_success -v
 ```
 
-### 6.3 Test Classification and Markers
+### 6.3 API Testing Restrictions
+
+#### Gemini API Testing Prohibition
+
+**Important**: Do not write tests that make actual calls to the Gemini API. This restriction is in place because:
+
+- The Gemini API has strict daily rate limits
+- API calls consume project quota and incur costs
+- Tests should be reliable and not dependent on external services
+
+Instead of testing with real API calls:
+
+- Use comprehensive mocking for all Gemini API interactions
+- Focus tests on the logic surrounding API calls, not the API itself
+- Use dependency injection to replace API clients with test doubles
+- Create separate integration test suites that are explicitly marked to be excluded from regular test runs
+
+Example of proper mocking approach:
+
+```python
+# GOOD: Using mocks to avoid actual API calls
+@patch('google.genai.GenerativeModel')
+def test_service_with_mocks(mock_model_class):
+    # Setup the mock to return controlled responses
+    mock_model = Mock()
+    mock_response = Mock()
+    mock_response.text = "Mocked response"
+    mock_model.generate_content.return_value = mock_response
+    mock_model_class.return_value = mock_model
+    
+    # Test your service
+    service = YourService()
+    result = service.process_with_ai("input")
+    
+    # Verify behavior without making actual API calls
+    assert result == "Expected processed result"
+```
+
+### 6.4 Test Classification and Markers
 ```bash
 # Execute only fast tests (exclude slow markers)
 python -m pytest -m "not slow"
@@ -281,28 +365,27 @@ class TestClassInfo:
 ```python
 import pytest
 from unittest.mock import Mock, patch
-from src.core.ai_services import GeminiService
+from src.utils.file_processor import FileProcessor
 
-class TestGeminiService:
-    """Tests for GeminiService"""
+class TestFileProcessor:
+    """Tests for FileProcessor"""
     
-    @patch('google.genai.configure')
-    @patch('google.genai.GenerativeModel')
-    def test_transcribe_audio_success(self, mock_model_class, mock_configure):
-        """Audio transcription success test"""
+    @patch('os.path.exists')
+    @patch('os.path.getsize')
+    def test_get_file_info_success(self, mock_getsize, mock_exists):
+        """File info retrieval test"""
         # Mock setup
-        mock_model = Mock()
-        mock_response = Mock()
-        mock_response.text = "Test transcription result"
-        mock_model.generate_content.return_value = mock_response
-        mock_model_class.return_value = mock_model
+        mock_exists.return_value = True
+        mock_getsize.return_value = 1024  # 1KB
         
         # Test execution
-        service = GeminiService(api_key="test_key")
-        result = service.transcribe_audio("test_audio.wav")
+        processor = FileProcessor()
+        result = processor.get_file_info("test_file.txt")
         
         # Verification
-        assert result == "Test transcription result"
+        assert result["size"] == 1024
+        assert result["exists"] is True
+        mock_exists.assert_called_once_with("test_file.txt")
 ```
 
 #### Tests Using Fixtures
@@ -504,16 +587,23 @@ from src.utils.logging_config import get_logger
 logger = get_logger(__name__)
 
 def example_function():
+    """Example function with proper logging"""
     logger.info("Processing started: example_function")
-    try:
-        # Processing logic
-        logger.debug("Detailed processing information")
-        result = some_operation()
-        logger.info(f"Processing completed: {result}")
-        return result
-    except Exception as e:
-        logger.error(f"Processing error: {str(e)}", exc_info=True)
-        raise
+    
+    # Processing logic
+    logger.debug("Detailed processing information")
+    
+    # Handle specific error cases directly
+    if not check_preconditions():
+        logger.error("Precondition check failed")
+        return None
+        
+    # Main processing
+    result = process_data()
+    
+    # Log completion and return result
+    logger.info(f"Processing completed: {result}")
+    return result
 ```
 
 ### 14.2 Debugging and Troubleshooting

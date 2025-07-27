@@ -12,6 +12,7 @@ from src.utils.prompt_loader import (
     PromptLoader,
     PromptTemplate,
     load_and_render_prompt,
+    load_and_render_prompt_with_language,
     get_prompt_loader
 )
 
@@ -192,7 +193,7 @@ class TestPromptLoader:
 """
         
         with pytest.raises(ValueError, match="Missing required section '概要'"):
-            loader._parse_markdown(invalid_content, "test_prompt")
+            _parse_markdown(invalid_content, "test_prompt")
     
     def test_parse_parameters(self, temp_prompts_dir):
         """パラメータ解析テスト"""
@@ -202,7 +203,7 @@ class TestPromptLoader:
 - `{custom_instructions}`: カスタム指示（オプション）
 - `{quality}`: 品質レベル"""
         
-        parameters = loader._parse_parameters(param_section)
+        parameters = _parse_parameters(param_section)
         
         assert len(parameters) == 3
         assert "language" in parameters
@@ -276,6 +277,166 @@ class TestConvenienceFunctions:
         
         # 同じインスタンスが返されることを確認
         assert loader1 is loader2
+
+
+class TestLanguageBasedPromptLoading:
+    """言語ベースのプロンプト読み込み機能のテスト"""
+    
+    @pytest.fixture
+    def temp_prompts_dir_with_language_files(self):
+        """言語ベースのプロンプトファイルを含む一時ディレクトリを作成"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prompts_dir = Path(temp_dir) / "prompts" / "definitions"
+            prompts_dir.mkdir(parents=True)
+            
+            # 英語ベースプロンプトファイル
+            en_base_content = """# English Base Prompts
+
+<test_category_test_prompt>
+# Test Prompt
+
+## 概要
+This is a test prompt in English.
+
+## パラメータ
+- `{param}`: Parameter
+
+## プロンプト本文
+This is a test prompt with {param}.
+</test_category_test_prompt>
+"""
+            
+            # 日本語ベースプロンプトファイル
+            ja_base_content = """# 日本語ベースプロンプト
+
+<test_category_test_prompt>
+# テストプロンプト
+
+## 概要
+これは日本語のテストプロンプトです。
+
+## パラメータ
+- `{param}`: パラメータ
+
+## プロンプト本文
+これは{param}を含むテストプロンプトです。
+</test_category_test_prompt>
+"""
+            
+            # 会議用プロンプトファイル（オーバーライド用）
+            meeting_content = """# 会議用プロンプト
+
+<test_category_test_prompt>
+# 会議用テストプロンプト
+
+## 概要
+これは会議用のテストプロンプトです。
+
+## パラメータ
+- `{param}`: パラメータ
+- `{meeting_param}`: 会議パラメータ
+
+## プロンプト本文
+これは会議用の{param}と{meeting_param}を含むテストプロンプトです。
+</test_category_test_prompt>
+"""
+            
+            # 学校用プロンプトファイル（オーバーライド用）
+            school_content = """# 学校用プロンプト
+
+<test_category_test_prompt>
+# 学校用テストプロンプト
+
+## 概要
+これは学校用のテストプロンプトです。
+
+## パラメータ
+- `{param}`: パラメータ
+- `{school_param}`: 学校パラメータ
+
+## プロンプト本文
+これは学校用の{param}と{school_param}を含むテストプロンプトです。
+</test_category_test_prompt>
+"""
+            
+            # ファイルを作成
+            (prompts_dir / "base_prompts_en.md").write_text(en_base_content, encoding='utf-8')
+            (prompts_dir / "base_prompts_ja.md").write_text(ja_base_content, encoding='utf-8')
+            (prompts_dir / "meeting_prompts_ja.md").write_text(meeting_content, encoding='utf-8')
+            (prompts_dir / "school_prompts_ja.md").write_text(school_content, encoding='utf-8')
+            
+            yield str(prompts_dir.parent.parent)
+    
+    def test_load_prompt_with_language_en(self, temp_prompts_dir_with_language_files):
+        """英語ベースプロンプトの読み込みテスト"""
+        loader = PromptLoader(temp_prompts_dir_with_language_files)
+        template = loader.load_prompt_with_language("test_category", "test_prompt", language="en")
+        
+        assert template.name == "test_prompt"
+        assert "English" in template.overview
+        assert "param" in template.parameters
+        assert "This is a test prompt with {param}" in template.content
+    
+    def test_load_prompt_with_language_ja(self, temp_prompts_dir_with_language_files):
+        """日本語ベースプロンプトの読み込みテスト"""
+        loader = PromptLoader(temp_prompts_dir_with_language_files)
+        template = loader.load_prompt_with_language("test_category", "test_prompt", language="ja")
+        
+        assert template.name == "test_prompt"
+        assert "日本語" in template.overview
+        assert "param" in template.parameters
+        assert "これは{param}を含むテストプロンプトです" in template.content
+    
+    def test_load_prompt_with_meeting_override(self, temp_prompts_dir_with_language_files):
+        """会議用プロンプトオーバーライドのテスト"""
+        loader = PromptLoader(temp_prompts_dir_with_language_files)
+        template = loader.load_prompt_with_language("test_category", "test_prompt", language="ja", prompt_type="meeting")
+        
+        assert template.name == "test_prompt"
+        assert "会議用" in template.overview
+        assert "param" in template.parameters
+        assert "meeting_param" in template.parameters
+        assert "これは会議用の{param}と{meeting_param}を含むテストプロンプト" in template.content
+    
+    def test_load_prompt_with_school_override(self, temp_prompts_dir_with_language_files):
+        """学校用プロンプトオーバーライドのテスト"""
+        loader = PromptLoader(temp_prompts_dir_with_language_files)
+        template = loader.load_prompt_with_language("test_category", "test_prompt", language="ja", prompt_type="school")
+        
+        assert template.name == "test_prompt"
+        assert "学校用" in template.overview
+        assert "param" in template.parameters
+        assert "school_param" in template.parameters
+        assert "これは学校用の{param}と{school_param}を含むテストプロンプト" in template.content
+    
+    @patch('src.utils.prompt_loader.PromptLoader')
+    def test_load_and_render_prompt_with_language(self, mock_loader_class, temp_prompts_dir_with_language_files):
+        """load_and_render_prompt_with_language関数のテスト"""
+        # モックの設定
+        mock_loader = mock_loader_class.return_value
+        mock_template = PromptTemplate(
+            name="test_prompt",
+            overview="テスト",
+            parameters={"param": "パラメータ", "meeting_param": "会議パラメータ"},
+            content="これは会議用の{param}と{meeting_param}を含むテストプロンプトです。"
+        )
+        mock_loader.load_prompt_with_language.return_value = mock_template
+        mock_loader.render_prompt.return_value = "これは会議用のテストと重要な会議を含むテストプロンプトです。"
+        
+        # 関数を実行
+        result = load_and_render_prompt_with_language(
+            category="test_category",
+            prompt_name="test_prompt",
+            language="ja",
+            prompt_type="meeting",
+            param="テスト",
+            meeting_param="重要な会議"
+        )
+        
+        # 結果を確認
+        assert result == "これは会議用のテストと重要な会議を含むテストプロンプトです。"
+        mock_loader.load_prompt_with_language.assert_called_once_with("test_category", "test_prompt", "ja", "meeting")
+        mock_loader.render_prompt.assert_called_once_with(mock_template, param="テスト", meeting_param="重要な会議")
 
 
 class TestErrorHandling:

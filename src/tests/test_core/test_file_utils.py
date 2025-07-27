@@ -60,7 +60,8 @@ class TestFileUtils:
         """Test successful file validation"""
         result = file_utils.validate_file(sample_text_file)
         
-        assert result is True
+        assert isinstance(result, dict)
+        assert result['is_valid'] is True
 
     def test_validate_file_nonexistent(self, file_utils):
         """Test file validation with non-existent file"""
@@ -571,7 +572,7 @@ class TestFileUtils:
         
         # Test file info
         info = file_utils.get_file_info(large_file)
-        assert info['size'] == 1024 * 1024
+        assert info['file_size'] == 1024 * 1024
         
         # Test hash calculation
         hash_result = file_utils.calculate_file_hash(large_file, 'md5')

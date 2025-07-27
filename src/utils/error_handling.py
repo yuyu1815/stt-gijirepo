@@ -33,10 +33,11 @@ class FileProcessingError(STTError):
 class APIError(STTError):
     """API呼び出しエラー"""
     
-    def __init__(self, message: str, api_name: Optional[str] = None, status_code: Optional[int] = None, details: Optional[Dict[str, Any]] = None):
+    def __init__(self, message: str, api_name: Optional[str] = None, status_code: Optional[int] = None, retry_delay: Optional[float] = None, details: Optional[Dict[str, Any]] = None):
         super().__init__(message, details)
         self.api_name = api_name
         self.status_code = status_code
+        self.retry_delay = retry_delay
 
 
 class QualityCheckError(STTError):
@@ -108,7 +109,10 @@ def is_retryable_error(error: Exception) -> bool:
     """
     # API関連のエラーは基本的にリトライ可能
     if isinstance(error, APIError):
-        # 4xx系のクライアントエラーはリトライしない
+        # 429 (レート制限)エラーは常にリトライ可能
+        if error.status_code == 429:
+            return True
+        # その他の4xx系のクライアントエラーはリトライしない
         if error.status_code and 400 <= error.status_code < 500:
             return False
         return True

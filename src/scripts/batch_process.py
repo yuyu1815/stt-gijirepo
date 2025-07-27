@@ -24,6 +24,8 @@ from workflows.state import STTConfig, create_default_config
 from utils.performance_monitor import PerformanceMonitor
 from utils.logging_config import setup_logging
 from utils import get_logger
+from utils.retry_utils import method_error_handler
+from utils.error_handling import STTError
 
 
 class BatchProcessor:
@@ -93,6 +95,7 @@ class BatchProcessor:
         self.logger.info(f"発見されたファイル数: {len(discovered_files)}")
         return discovered_files
     
+    @method_error_handler(STTError, "ファイル処理に失敗")
     def process_single_file(self, file_path: str, upload_to_notion: bool = False) -> Dict[str, Any]:
         """
         単一ファイルの処理
@@ -109,68 +112,47 @@ class BatchProcessor:
             input_size=os.path.getsize(file_path) if os.path.exists(file_path) else 0
         )
         
-        try:
-            self.logger.info(f"処理開始: {file_path}")
-            
-            result = execute_stt_workflow(
-                file_path=file_path,
-                config=self.config,
-                upload_to_notion=upload_to_notion
-            )
-            
-            # 結果の拡張
-            result.update({
-                'batch_info': {
-                    'processed_at': datetime.now().isoformat(),
-                    'file_path': file_path,
-                    'file_name': os.path.basename(file_path),
-                    'file_size': os.path.getsize(file_path) if os.path.exists(file_path) else 0
-                }
-            })
-            
-            success = result.get('final_status') == 'success'
-            
-            self.performance_monitor.end_operation(
-                operation_id,
-                success=success,
-                output_size=len(result.get('minutes', ''))
-            )
-            
-            if success:
-                self.successful_files += 1
-                self.logger.info(f"処理成功: {file_path}")
-            else:
-                self.failed_files += 1
-                self.logger.error(f"処理失敗: {file_path} - {result.get('errors', [])}")
-            
-            return result
-            
-        except Exception as e:
-            self.performance_monitor.end_operation(
-                operation_id,
-                success=False,
-                error_message=str(e)
-            )
-            
-            self.failed_files += 1
-            error_result = {
-                'final_status': 'error',
-                'errors': [f"バッチ処理エラー: {str(e)}"],
-                'file_path': file_path,
-                'batch_info': {
-                    'processed_at': datetime.now().isoformat(),
-                    'file_path': file_path,
-                    'file_name': os.path.basename(file_path),
-                    'error': str(e)
-                }
-            }
-            
-            self.logger.error(f"処理例外: {file_path} - {str(e)}")
-            return error_result
+        self.logger.info(f"処理開始: {file_path}")
         
-        finally:
-            self.processed_files += 1
+        # 処理実行
+        result = execute_stt_workflow(
+            file_path=file_path,
+            config=self.config,
+            upload_to_notion=upload_to_notion
+        )
+        
+        # 結果の拡張
+        result.update({
+            'batch_info': {
+                'processed_at': datetime.now().isoformat(),
+                'file_path': file_path,
+                'file_name': os.path.basename(file_path),
+                'file_size': os.path.getsize(file_path) if os.path.exists(file_path) else 0
+            }
+        })
+        
+        success = result.get('final_status') == 'success'
+        
+        self.performance_monitor.end_operation(
+            operation_id,
+            success=success,
+            output_size=len(result.get('minutes', ''))
+        )
+        
+        if success:
+            self.successful_files += 1
+            self.logger.info(f"処理成功: {file_path}")
+        else:
+            self.failed_files += 1
+            self.logger.error(f"処理失敗: {file_path} - {result.get('errors', [])}")
+        
+        # 処理カウンタを更新
+        self.processed_files += 1
+        
+        return result
+        
     
+    @method_error_handler(STTError, "バッチ処理に失敗")
     def process_batch(self, file_paths: List[str], upload_to_notion: bool = False) -> List[Dict[str, Any]]:
         """
         バッチ処理の実行
@@ -202,22 +184,19 @@ class BatchProcessor:
             for future in as_completed(future_to_file):
                 file_path = future_to_file[future]
                 
-                try:
-                    result = future.result()
-                    self.results.append(result)
-                    
-                    # 進捗表示
-                    progress = (self.processed_files / self.total_files) * 100
-                    elapsed_time = time.time() - self.start_time
-                    
-                    self.logger.info(
-                        f"進捗: {self.processed_files}/{self.total_files} ({progress:.1f}%) "
-                        f"成功: {self.successful_files}, 失敗: {self.failed_files}, "
-                        f"経過時間: {elapsed_time:.1f}秒"
-                    )
-                    
-                except Exception as e:
-                    self.logger.error(f"Future処理エラー: {file_path} - {str(e)}")
+                # Future結果の取得（例外は伝播させる）
+                result = future.result()
+                self.results.append(result)
+                
+                # 進捗表示
+                progress = (self.processed_files / self.total_files) * 100
+                elapsed_time = time.time() - self.start_time
+                
+                self.logger.info(
+                    f"進捗: {self.processed_files}/{self.total_files} ({progress:.1f}%) "
+                    f"成功: {self.successful_files}, 失敗: {self.failed_files}, "
+                    f"経過時間: {elapsed_time:.1f}秒"
+                )
         
         total_time = time.time() - self.start_time
         self.logger.info(
@@ -300,6 +279,7 @@ def create_config_from_args(args) -> STTConfig:
     return config
 
 
+@method_error_handler(STTError, "バッチ処理メイン関数に失敗", passthrough_exceptions=[KeyboardInterrupt])
 def main():
     """メイン関数"""
     parser = argparse.ArgumentParser(
@@ -430,18 +410,18 @@ def main():
     setup_logging(level=args.log_level)
     logger = get_logger(__name__)
     
+    # 設定の作成
+    if args.config and os.path.exists(args.config):
+        with open(args.config, 'r', encoding='utf-8') as f:
+            config_data = json.load(f)
+        config = STTConfig(**config_data)
+    else:
+        config = create_config_from_args(args)
+    
+    # バッチプロセッサの初期化
+    processor = BatchProcessor(config, args.max_concurrent)
+    
     try:
-        # 設定の作成
-        if args.config and os.path.exists(args.config):
-            with open(args.config, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-            config = STTConfig(**config_data)
-        else:
-            config = create_config_from_args(args)
-        
-        # バッチプロセッサの初期化
-        processor = BatchProcessor(config, args.max_concurrent)
-        
         # ファイル発見
         file_paths = processor.discover_files(args.input_paths, args.recursive)
         
@@ -482,17 +462,11 @@ def main():
         # 終了コード
         return 0 if summary['failed_files'] == 0 else 1
         
-    except KeyboardInterrupt:
-        logger.info("処理が中断されました")
-        return 130
-    
-    except Exception as e:
-        logger.error(f"予期しないエラー: {str(e)}")
-        return 1
-    
     finally:
-        if 'processor' in locals():
+        if processor:
             processor.cleanup()
+            
+    # KeyboardInterruptはpassthrough_exceptionsで処理されるため、ここでは明示的に処理しない
 
 
 if __name__ == '__main__':

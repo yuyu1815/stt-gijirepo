@@ -37,9 +37,15 @@ class TestAudioProcessor:
     @pytest.fixture
     def sample_audio_file(self, temp_dir):
         """テスト用音声ファイル（WAV形式）"""
-        # 1秒間の440Hz正弦波を生成
-        audio = AudioSegment.silent(duration=1000)  # 1秒
-        audio = audio.overlay(AudioSegment.sine(440, duration=1000))
+        # 1秒間の440Hzサイン波を生成（無音ではなく実際の音声を使用）
+        from pydub.generators import Sine
+        sine_wave = Sine(440)  # 440Hz (A4音)
+        audio = sine_wave.to_audio_segment(duration=1000)  # 1秒
+        
+        # 音量を調整して一貫したdBFS値を持つようにする
+        target_dBFS = -20.0
+        change_in_dBFS = target_dBFS - audio.dBFS
+        audio = audio.apply_gain(change_in_dBFS)
         
         file_path = os.path.join(temp_dir, "test_audio.wav")
         audio.export(file_path, format="wav")
@@ -78,21 +84,24 @@ class TestAudioProcessor:
         processor = AudioProcessor()
         assert processor is not None
 
-    @patch('pydub.utils.which')
-    def test_validate_dependencies_success(self, mock_which, audio_processor):
+    def test_validate_dependencies_success(self, audio_processor):
         """依存関係検証成功テスト"""
-        mock_which.return_value = "/usr/bin/ffmpeg"
-        
+        # 常に/usr/bin/ffmpegを返すwhich関数を作成
+        def mock_which(cmd):
+            return "/usr/bin/ffmpeg"
+            
         # 例外が発生しないことを確認
-        audio_processor._validate_dependencies()
+        audio_processor._validate_dependencies(which_func=mock_which)
 
-    @patch('pydub.utils.which')
-    def test_validate_dependencies_missing_ffmpeg(self, mock_which, audio_processor):
+    def test_validate_dependencies_missing_ffmpeg(self):
         """FFmpeg未インストール時のエラーテスト"""
-        mock_which.return_value = None
-        
+        # 常にNoneを返すwhich関数を作成
+        def mock_which(cmd):
+            return None
+            
+        # 新しいインスタンスを作成し、モックwhich関数を渡す
         with pytest.raises(FileProcessingError, match="FFmpeg is not installed"):
-            audio_processor._validate_dependencies()
+            AudioProcessor(which_func=mock_which)
 
     def test_load_audio_wav_success(self, audio_processor, sample_audio_file):
         """WAVファイル読み込み成功テスト"""

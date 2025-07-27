@@ -61,16 +61,62 @@ def with_retry(
                         raise e
                     
                     # 遅延時間を計算
-                    delay = min(min_delay * (backoff_factor ** attempt), max_delay)
+                    # APIエラーで具体的なリトライ遅延が指定されている場合はそれを使用
+                    if isinstance(e, APIError) and e.retry_delay is not None:
+                        delay = e.retry_delay
+                        delay_source = "APIレスポンス"
+                    else:
+                        # 指数バックオフによる遅延を計算
+                        delay = min(min_delay * (backoff_factor ** attempt), max_delay)
+                        delay_source = "バックオフ計算"
                     
                     if logger:
-                        logger.warning(f"リトライ {attempt + 1}/{max_retries}: {func.__name__} - {e} (次の試行まで{delay:.1f}秒待機)")
+                        logger.warning(f"リトライ {attempt + 1}/{max_retries}: {func.__name__} - {e} ({delay_source}による遅延: {delay:.1f}秒待機)")
                     
                     time.sleep(delay)
             
             # ここには到達しないはずだが、念のため
             if last_exception:
                 raise last_exception
+                
+        return wrapper
+    return decorator
+
+
+def method_error_handler(error_class, error_message_prefix="", passthrough_exceptions=None):
+    """
+    メソッドのエラーハンドリングデコレータ
+    
+    Args:
+        error_class: 発生させるエラークラス
+        error_message_prefix: エラーメッセージのプレフィックス
+        passthrough_exceptions: そのまま再発生させる例外クラスのリスト
+    """
+    if passthrough_exceptions is None:
+        passthrough_exceptions = [FileNotFoundError]  # デフォルトでFileNotFoundErrorはそのまま再発生
+    
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                # 既に指定されたエラークラスの場合はそのまま再発生
+                if isinstance(e, error_class):
+                    raise e
+                
+                # パススルー対象の例外の場合はそのまま再発生
+                for exc_type in passthrough_exceptions:
+                    if isinstance(e, exc_type):
+                        raise e
+                
+                # エラーメッセージを構築
+                prefix = error_message_prefix
+                if not prefix:
+                    prefix = f"{func.__name__}に失敗"
+                
+                error_message = f"{prefix}: {str(e)}"
+                raise error_class(error_message)
                 
         return wrapper
     return decorator
@@ -122,17 +168,29 @@ def api_call_with_retry(
                     logger.error(f"API呼び出しでリトライ不可能なエラーです: {e}")
                 raise e
             
-            # 4xx系のクライアントエラーはリトライしない
-            if isinstance(e, APIError) and e.status_code and 400 <= e.status_code < 500:
+            # リトライ可能かどうかを判定
+            should_retry = is_retryable_error(e)
+            if not should_retry:
                 if logger:
-                    logger.error(f"クライアントエラーのためリトライしません: {e}")
+                    logger.error(f"リトライ不可能なエラーです: {e}")
                 raise e
             
             # 遅延時間を計算
-            delay = min(min_delay * (backoff_factor ** attempt), max_delay)
+            # APIエラーで具体的なリトライ遅延が指定されている場合はそれを使用
+            if isinstance(e, APIError) and e.retry_delay is not None:
+                delay = e.retry_delay
+                delay_source = "APIレスポンス"
+            else:
+                # 指数バックオフによる遅延を計算
+                delay = min(min_delay * (backoff_factor ** attempt), max_delay)
+                # ジッターを追加（±10%）
+                import random
+                jitter = random.uniform(0.9, 1.1)
+                delay = delay * jitter
+                delay_source = "バックオフ計算"
             
             if logger:
-                logger.warning(f"API呼び出しリトライ {attempt + 1}/{max_retries}: {func.__name__} - {e} (次の試行まで{delay:.1f}秒待機)")
+                logger.warning(f"API呼び出しリトライ {attempt + 1}/{max_retries}: {func.__name__} - {e} ({delay_source}による遅延: {delay:.1f}秒)")
             
             time.sleep(delay)
     

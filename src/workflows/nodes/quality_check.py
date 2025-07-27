@@ -11,6 +11,7 @@ from datetime import datetime
 from src.workflows.state import STTState
 from src.utils import get_logger, QualityCheckError, api_call_with_retry
 from src.utils.logging_config import log_state_transition, LogContext
+from src.utils.retry_utils import method_error_handler
 
 # Gemini APIのインポートを試行
 try:
@@ -45,11 +46,9 @@ def quality_check_node(state: STTState) -> STTState:
             
             transcription = state.get("transcription", "")
             
+            # 文字起こし結果が空の場合は早期リターン
             if not transcription:
-                warning_msg = "文字起こし結果が空のため品質チェックをスキップします"
-                state["warnings"].append(warning_msg)
-                logger.warning(warning_msg)
-                state["quality_check_result"] = _create_empty_quality_result()
+                _handle_empty_transcription(state, logger)
                 return state
             
             ctx.log_progress(f"文字起こし結果の品質チェック開始: {len(transcription)}文字")
@@ -60,7 +59,7 @@ def quality_check_node(state: STTState) -> STTState:
             
             # ハルシネーション検出（設定で有効な場合）
             hallucination_result = {}
-            if state["settings"].get("enable_hallucination_check", True):
+            if state["settings"].get("enable_hallucination_check"):
                 ctx.log_progress("ハルシネーション検出を実行")
                 hallucination_result = _detect_hallucination(transcription, state["settings"])
                 ctx.log_progress(f"ハルシネーション検出完了: スコア {hallucination_result.get('hallucination_score', 0):.2f}")
@@ -80,14 +79,25 @@ def quality_check_node(state: STTState) -> STTState:
             logger.info(f"品質チェック完了: 総合スコア {quality_result['overall_score']:.2f}")
             
         except Exception as e:
-            error_msg = f"品質チェックエラー: {str(e)}"
-            state["errors"].append(error_msg)
-            logger.error(error_msg, exc_info=True)
-            
-            # エラー時はデフォルト結果を設定
-            state["quality_check_result"] = _create_error_quality_result(str(e))
+            _handle_quality_check_error(state, e, logger)
     
     return state
+
+def _handle_empty_transcription(state: STTState, logger) -> None:
+    """空の文字起こし結果を処理するヘルパー関数"""
+    warning_msg = "文字起こし結果が空のため品質チェックをスキップします"
+    state["warnings"].append(warning_msg)
+    logger.warning(warning_msg)
+    state["quality_check_result"] = _create_empty_quality_result()
+
+def _handle_quality_check_error(state: STTState, error: Exception, logger) -> None:
+    """品質チェックエラーを処理するヘルパー関数"""
+    error_msg = f"品質チェックエラー: {str(error)}"
+    state["errors"].append(error_msg)
+    logger.error(error_msg, exc_info=True)
+    
+    # エラー時はデフォルト結果を設定
+    state["quality_check_result"] = _create_error_quality_result(str(error))
 
 
 def _perform_basic_quality_check(transcription: str) -> Dict[str, Any]:
@@ -170,6 +180,7 @@ def _perform_basic_quality_check(transcription: str) -> Dict[str, Any]:
     return result
 
 
+@method_error_handler(QualityCheckError, "ハルシネーション検出に失敗しました")
 def _detect_hallucination(transcription: str, settings: Dict[str, Any]) -> Dict[str, Any]:
     """
     ハルシネーション検出を実行
@@ -189,47 +200,44 @@ def _detect_hallucination(transcription: str, settings: Dict[str, Any]) -> Dict[
         "confidence": 0.0
     }
     
+    # Gemini APIが利用できない場合は早期リターン
     if not HAS_GEMINI:
         logger.warning("Gemini APIが利用できないためハルシネーション検出をスキップします")
         return result
     
-    try:
-        # API設定
-        api_key = settings.get("gemini_api_key")
-        if not api_key:
-            logger.warning("Gemini APIキーが設定されていないためハルシネーション検出をスキップします")
-            return result
-        
-        import os
-        os.environ['GOOGLE_API_KEY'] = api_key
-        client = genai.Client()
-        model_name = settings.get("gemini_model", "gemini-1.5-pro")
-        
-        # ハルシネーション検出プロンプト
-        prompt = _load_hallucination_check_prompt()
-        
-        # AI による検証実行
-        def _generate_content():
-            return client.models.generate_content(
-                model=model_name,
-                contents=[prompt, f"\n\n検証対象テキスト:\n{transcription}"]
-            )
-        
-        response = api_call_with_retry(
-            _generate_content,
-            max_retries=3,
-            logger=logger
+    # APIキーが設定されていない場合は早期リターン
+    api_key = settings.get("gemini_api_key")
+    if not api_key:
+        logger.warning("Gemini APIキーが設定されていないためハルシネーション検出をスキップします")
+        return result
+    
+    # API設定
+    import os
+    os.environ['GOOGLE_API_KEY'] = api_key
+    client = genai.Client()
+    model_name = settings.get("gemini_model")
+    
+    # ハルシネーション検出プロンプト
+    prompt = _load_hallucination_check_prompt()
+    
+    # AI による検証実行
+    def _generate_content():
+        return client.models.generate_content(
+            model=model_name,
+            contents=[prompt, f"\n\n検証対象テキスト:\n{transcription}"]
         )
-        
-        # 結果を解析
-        analysis_result = _parse_hallucination_response(response.text)
-        result.update(analysis_result)
-        
-        logger.info(f"ハルシネーション検出完了: スコア {result['hallucination_score']:.2f}")
-        
-    except Exception as e:
-        logger.error(f"ハルシネーション検出エラー: {str(e)}")
-        result["detected_issues"].append(f"検出処理エラー: {str(e)}")
+    
+    response = api_call_with_retry(
+        _generate_content,
+        max_retries=settings.get("max_retries", 5),
+        logger=logger
+    )
+    
+    # 結果を解析
+    analysis_result = _parse_hallucination_response(response.text)
+    result.update(analysis_result)
+    
+    logger.info(f"ハルシネーション検出完了: スコア {result['hallucination_score']:.2f}")
     
     return result
 
@@ -422,7 +430,7 @@ def _generate_quality_warnings(state: STTState, quality_result: Dict[str, Any]) 
         quality_result: 品質チェック結果
     """
     overall_score = quality_result.get("overall_score", 0.0)
-    min_threshold = state["settings"].get("min_confidence_threshold", 0.7)
+    min_threshold = state["settings"].get("min_confidence_threshold")
     
     if overall_score < min_threshold:
         warning_msg = f"品質スコア({overall_score:.2f})が閾値({min_threshold})を下回っています"
@@ -439,6 +447,7 @@ def _generate_quality_warnings(state: STTState, quality_result: Dict[str, Any]) 
         state["warnings"].append(f"ハルシネーション: {issue}")
 
 
+@method_error_handler(QualityCheckError, "ハルシネーション検出用プロンプトの読み込みに失敗")
 def _load_hallucination_check_prompt() -> str:
     """
     ハルシネーション検出用プロンプトを読み込み
@@ -446,17 +455,23 @@ def _load_hallucination_check_prompt() -> str:
     Returns:
         プロンプト文字列
     """
+    logger = get_logger("quality_check")
+    
+    # プロンプトローダーを使用して外部ファイルから読み込み
     try:
-        # プロンプトローダーを使用して外部ファイルから読み込み
         from src.utils.prompt_loader import PromptLoader
         loader = PromptLoader()
-        return loader.load_prompt("quality_check", "detailed_hallucination_check")
+        prompt = loader.load_prompt("quality_check", "hallucination_check")
+        if prompt:
+            return prompt
+    except ImportError:
+        logger.warning("PromptLoaderモジュールが見つかりません、デフォルトプロンプトを使用します")
     except Exception as e:
-        # フォールバック用のデフォルトプロンプト
-        logger = get_logger("quality_check")
         logger.warning(f"外部プロンプトファイルの読み込みに失敗、デフォルトを使用: {str(e)}")
-        
-        return """以下の文字起こし結果について、ハルシネーション（幻覚・誤認識）の可能性を検証してください。
+    
+    # デフォルトプロンプト
+    logger.info("デフォルトのハルシネーション検出プロンプトを使用します")
+    return """以下の文字起こし結果について、ハルシネーション（幻覚・誤認識）の可能性を検証してください。
 
 検証項目:
 1. 音声から実際に聞こえるはずのない内容が含まれていないか
@@ -471,6 +486,7 @@ def _load_hallucination_check_prompt() -> str:
 信頼度: [0.0-1.0の数値]"""
 
 
+@method_error_handler(QualityCheckError, "ハルシネーション検出レスポンスの解析に失敗")
 def _parse_hallucination_response(response_text: str) -> Dict[str, Any]:
     """
     ハルシネーション検出レスポンスを解析
@@ -487,33 +503,31 @@ def _parse_hallucination_response(response_text: str) -> Dict[str, Any]:
         "confidence": 0.0
     }
     
-    try:
-        lines = response_text.split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            
-            # スコアの抽出
-            if 'ハルシネーションスコア' in line or 'スコア' in line:
-                score_match = re.search(r'(\d+\.?\d*)', line)
-                if score_match:
-                    result["hallucination_score"] = float(score_match.group(1))
-            
-            # 信頼度の抽出
-            elif '信頼度' in line:
-                confidence_match = re.search(r'(\d+\.?\d*)', line)
-                if confidence_match:
-                    result["confidence"] = float(confidence_match.group(1))
-            
-            # 問題の抽出
-            elif '問題' in line and '：' in line:
-                issue = line.split('：', 1)[1].strip()
-                if issue:
-                    result["detected_issues"].append(issue)
+    if not response_text:
+        return result
     
-    except Exception:
-        # 解析に失敗した場合はデフォルト値を使用
-        pass
+    lines = response_text.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        
+        # スコアの抽出
+        if 'ハルシネーションスコア' in line or 'スコア' in line:
+            score_match = re.search(r'(\d+\.?\d*)', line)
+            if score_match:
+                result["hallucination_score"] = float(score_match.group(1))
+        
+        # 信頼度の抽出
+        elif '信頼度' in line:
+            confidence_match = re.search(r'(\d+\.?\d*)', line)
+            if confidence_match:
+                result["confidence"] = float(confidence_match.group(1))
+        
+        # 問題の抽出
+        elif '問題' in line and '：' in line:
+            issue = line.split('：', 1)[1].strip()
+            if issue:
+                result["detected_issues"].append(issue)
     
     return result
 

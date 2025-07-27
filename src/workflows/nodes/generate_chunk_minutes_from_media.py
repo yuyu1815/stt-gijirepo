@@ -4,12 +4,11 @@ STT議事録システム - メディアチャンク議事録生成ノード
 メディアチャンクから直接議事録を生成する（マルチモーダル解析ルート）
 """
 
-from typing import List
-import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from src.core.ai_services import GeminiService
-from src.utils import get_logger
+from src.utils import get_logger, api_call_with_retry, APIError
 from src.utils.retry_utils import with_retry
 from src.utils.error_handling import handle_error
 from src.workflows.state import STTState
@@ -57,7 +56,7 @@ def generate_chunk_minutes_from_media_node(state: STTState) -> STTState:
         # 並列処理で各チャンクを処理
         with ThreadPoolExecutor(max_workers=3) as executor:
             future_to_chunk = {
-                executor.submit(_process_media_chunk, gemini_service, chunk_path, i + 1): i
+                executor.submit(_process_media_chunk, gemini_service, chunk_path, i + 1, state): i
                 for i, chunk_path in enumerate(media_chunks)
             }
             
@@ -68,8 +67,14 @@ def generate_chunk_minutes_from_media_node(state: STTState) -> STTState:
                     chunk_minutes.append(chunk_minute)
                     logger.info(f"チャンク {chunk_index + 1}/{len(media_chunks)} 処理完了")
                 except Exception as e:
-                    error_msg = f"チャンク {chunk_index + 1} 処理エラー: {str(e)}"
-                    handle_error(e, f"チャンク {chunk_index + 1} 処理", logger)
+                    # レート制限エラー（429）の場合、ユーザーフレンドリーなメッセージを表示
+                    if isinstance(e, APIError) and e.status_code == 429 and e.retry_delay is not None:
+                        error_msg = f"チャンク {chunk_index + 1} 処理エラー: レート制限に達しました。次に送信できる時間は{e.retry_delay}秒後です。"
+                        logger.warning(error_msg)
+                    else:
+                        error_msg = f"チャンク {chunk_index + 1} 処理エラー: {str(e)}"
+                        handle_error(e, f"チャンク {chunk_index + 1} 処理", logger)
+                    
                     state["errors"].append(error_msg)
                     # エラーが発生したチャンクには空の議事録を追加
                     chunk_minutes.append(f"[チャンク {chunk_index + 1}: 処理エラーのため内容を取得できませんでした]")
@@ -91,14 +96,26 @@ def generate_chunk_minutes_from_media_node(state: STTState) -> STTState:
         return state
         
     except Exception as e:
-        error_msg = f"メディアチャンク議事録生成エラー: {str(e)}"
-        handle_error(e, "メディアチャンク議事録生成", logger)
+        # レート制限エラー（429）の場合、ユーザーフレンドリーなメッセージを表示
+        if isinstance(e, APIError) and e.status_code == 429 and e.retry_delay is not None:
+            error_msg = f"メディアチャンク議事録生成エラー: レート制限に達しました。次に送信できる時間は{e.retry_delay}秒後です。"
+            logger.warning(error_msg)
+            # ユーザーへの表示用メッセージを追加
+            state["rate_limit_info"] = {
+                "status": "rate_limited",
+                "retry_delay": e.retry_delay,
+                "retry_time": time.time() + e.retry_delay
+            }
+        else:
+            error_msg = f"メディアチャンク議事録生成エラー: {str(e)}"
+            handle_error(e, "メディアチャンク議事録生成", logger)
+        
         state["errors"].append(error_msg)
         return state
 
 
 @with_retry(max_retries=3, backoff_factor=2.0)
-def _process_media_chunk(gemini_service: GeminiService, chunk_path: str, chunk_number: int) -> str:
+def _process_media_chunk(gemini_service: GeminiService, chunk_path: str, chunk_number: int, state: STTState = None) -> str:
     """
     単一のメディアチャンクを処理して議事録を生成
     
@@ -106,6 +123,7 @@ def _process_media_chunk(gemini_service: GeminiService, chunk_path: str, chunk_n
         gemini_service: Geminiサービスインスタンス
         chunk_path: チャンクファイルパス
         chunk_number: チャンク番号
+        state: 処理状態
         
     Returns:
         生成された議事録テキスト
@@ -117,15 +135,20 @@ def _process_media_chunk(gemini_service: GeminiService, chunk_path: str, chunk_n
         
         # メディアファイルから直接議事録を生成
         # Geminiのマルチモーダル機能を使用して動画/音声から議事録を生成
-        prompt = _create_media_minutes_prompt(chunk_number)
+        prompt = _create_media_minutes_prompt(chunk_number, state)
         
         # ファイルの拡張子に基づいて処理方法を決定
-        if chunk_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
-            # 動画ファイルの場合
-            minutes_text = gemini_service.generate_minutes_from_video(chunk_path, prompt)
-        else:
-            # 音声ファイルの場合
-            minutes_text = gemini_service.generate_minutes_from_audio(chunk_path, prompt)
+        # api_call_with_retry を使用して API レート制限エラーを処理
+        minutes_text = api_call_with_retry(
+            gemini_service.generate_minutes_from_media,
+            chunk_path, 
+            prompt,
+            max_retries=5,
+            backoff_factor=3.0,
+            min_delay=2.0,
+            max_delay=60.0,
+            logger=logger
+        )
         
         if not minutes_text or minutes_text.strip() == "":
             return f"[チャンク {chunk_number}: 内容を取得できませんでした]"
@@ -141,43 +164,31 @@ def _process_media_chunk(gemini_service: GeminiService, chunk_path: str, chunk_n
         raise
 
 
-def _create_media_minutes_prompt(chunk_number: int) -> str:
+def _create_media_minutes_prompt(chunk_number: int, state: STTState = None) -> str:
     """
     メディアチャンク用の議事録生成プロンプトを作成
     
     Args:
         chunk_number: チャンク番号
+        state: 処理状態（設定情報を取得するため）
         
     Returns:
         プロンプトテキスト
     """
-    try:
-        # プロンプトローダーを使用して外部ファイルから読み込み
-        from src.utils.prompt_loader import PromptLoader
-        loader = PromptLoader()
-        template = loader.load_prompt("minutes_generation", "chunk_media_minutes")
-        return template.format(chunk_number=chunk_number)
-    except Exception as e:
-        # フォールバック用のデフォルトプロンプト
-        from src.utils import get_logger
-        logger = get_logger("chunk_minutes_media")
-        logger.warning(f"外部プロンプトファイルの読み込みに失敗、デフォルトを使用: {str(e)}")
+
+    # プロンプトローダーを使用して外部ファイルから読み込み
+    from src.prompts.minutes_generation import MinutesGenerationPrompts, MinutesFormat
+
+    # 設定タイプを取得（"会議" または "授業"）
+    setting_type = None
+    if state and "settings" in state:
+        setting_type = state["settings"].get("prompt_type")
         
-        return f"""
-このメディアファイル（チャンク {chunk_number}）から議事録を生成してください。
-
-以下の点に注意して議事録を作成してください：
-
-1. **内容の要約**: 話し合われた主要なトピックや議題を明確に記載
-2. **発言者の識別**: 可能な限り発言者を特定し、発言内容を整理
-3. **重要な決定事項**: 決定された事項や合意点を明確に記載
-4. **アクションアイテム**: 今後の行動項目や担当者があれば記載
-5. **時系列の整理**: 議論の流れを時系列で整理
-
-出力形式：
-- Markdown形式で出力
-- 見出しや箇条書きを適切に使用
-- 重要な部分は太字で強調
-
-このチャンクの内容のみを対象とし、他のチャンクの内容は含めないでください。
-"""
+    # 詳細議事録プロンプトを使用し、チャンク番号をカスタム指示として渡す
+    template = MinutesGenerationPrompts.get_minutes_prompt(
+        format_type=MinutesFormat.DETAILED,
+        language="ja", # またはstateから言語を取得
+        custom_instructions=f"このメディアファイル（チャンク {chunk_number}）から議事録を生成してください。\n\nこのチャンクの内容のみを対象とし、他のチャンクの内容は含めないでください。",
+        setting_type=setting_type
+    )
+    return template

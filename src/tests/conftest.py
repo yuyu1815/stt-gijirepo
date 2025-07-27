@@ -67,11 +67,36 @@ def sample_video_file() -> Path:
 @pytest.fixture
 def test_config() -> STTConfig:
     """テスト用設定"""
+    import json
+    from pathlib import Path
+    
+    # settings.jsonからAPI設定を読み込む
+    api_settings = {
+        "gemini_api_key": "test_api_key",
+        "gemini_model": "gemini-1.5-pro",
+        "notion_token": "test_notion_token",
+        "notion_database_id": "test_database_id"
+    }
+    
+    settings_file = Path("settings.json")
+    if settings_file.exists():
+        try:
+            with open(settings_file, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+                
+                # API設定を上書き
+                for key in ["gemini_api_key", "gemini_model", "notion_token", "notion_database_id"]:
+                    if key in settings:
+                        api_settings[key] = settings[key]
+        except Exception as e:
+            print(f"警告: 設定ファイル({settings_file})の読み込みに失敗しました: {e}")
+            print("テスト用のデフォルト値を使用します。")
+    
     return STTConfig(
         # API設定
-        gemini_api_key="test_api_key",
-        gemini_model="gemini-1.5-pro",
-        notion_token="test_notion_token",
+        gemini_api_key=api_settings["gemini_api_key"],
+        gemini_model=api_settings["gemini_model"],
+        notion_token=api_settings["notion_token"],
         
         # 処理設定
         max_audio_duration=600,  # 10分（テスト用に短縮）
@@ -90,7 +115,7 @@ def test_config() -> STTConfig:
         include_speaker_labels=False,
         
         # Notion設定
-        notion_database_id="test_database_id",
+        notion_database_id=api_settings["notion_database_id"],
         notion_template_id=None
     )
 
@@ -329,11 +354,33 @@ def performance_monitor() -> PerformanceMonitor:
 @pytest.fixture
 def mock_environment_variables():
     """環境変数のモック"""
+    import json
+    from pathlib import Path
+    
+    # デフォルト値
     env_vars = {
         'GEMINI_API_KEY': 'test_gemini_key',
         'NOTION_TOKEN': 'test_notion_token',
         'NOTION_DATABASE_ID': 'test_database_id'
     }
+    
+    # settings.jsonからAPI設定を読み込む
+    settings_file = Path("settings.json")
+    if settings_file.exists():
+        try:
+            with open(settings_file, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+                
+                # API設定を上書き
+                if "gemini_api_key" in settings:
+                    env_vars['GEMINI_API_KEY'] = settings["gemini_api_key"]
+                if "notion_token" in settings:
+                    env_vars['NOTION_TOKEN'] = settings["notion_token"]
+                if "notion_database_id" in settings:
+                    env_vars['NOTION_DATABASE_ID'] = settings["notion_database_id"]
+        except Exception as e:
+            print(f"警告: 設定ファイル({settings_file})の読み込みに失敗しました: {e}")
+            print("テスト用のデフォルト環境変数を使用します。")
     
     with patch.dict(os.environ, env_vars):
         yield env_vars

@@ -13,6 +13,7 @@ from pydub import AudioSegment
 from src.workflows.state import STTState
 from src.utils import get_logger, FileProcessingError
 from src.utils.logging_config import log_state_transition, LogContext
+from src.utils.retry_utils import method_error_handler
 
 
 def split_audio_node(state: STTState) -> STTState:
@@ -33,37 +34,31 @@ def split_audio_node(state: STTState) -> STTState:
     logger = get_logger("audio_splitting")
     
     with LogContext(logger, "音声分割", state["session_id"]) as ctx:
+        # 状態遷移をログ
+        log_state_transition(logger, state["processing_stage"], "audio_splitting", state["session_id"])
+        state["processing_stage"] = "audio_splitting"
+        
+        file_path = state["file_path"]
+        audio_duration = state.get("audio_duration", 0)
+        
+        # 設定から分割サイズを取得
+        chunk_size = state["settings"].get("chunk_size", 600)  # デフォルト10分
+        max_duration = state["settings"].get("max_audio_duration", 2400)  # デフォルト40分
+        
+        ctx.log_progress(f"音声長: {audio_duration:.2f}秒, 分割サイズ: {chunk_size}秒")
+        
+        # 分割が必要かチェック
+        if audio_duration <= chunk_size:
+            return _handle_short_audio(state, audio_duration, file_path, ctx)
+        
+        # 最大長チェック
+        if audio_duration > max_duration:
+            _add_max_duration_warning(state, audio_duration, max_duration, logger)
+        
+        ctx.log_progress("音声分割を開始")
+        
+        # 音声を分割
         try:
-            # 状態遷移をログ
-            log_state_transition(logger, state["processing_stage"], "audio_splitting", state["session_id"])
-            state["processing_stage"] = "audio_splitting"
-            
-            file_path = state["file_path"]
-            audio_duration = state.get("audio_duration", 0)
-            
-            # 設定から分割サイズを取得
-            chunk_size = state["settings"].get("chunk_size", 600)  # デフォルト10分
-            max_duration = state["settings"].get("max_audio_duration", 2400)  # デフォルト40分
-            
-            ctx.log_progress(f"音声長: {audio_duration:.2f}秒, 分割サイズ: {chunk_size}秒")
-            
-            # 分割が必要かチェック
-            if audio_duration <= chunk_size:
-                ctx.log_progress("分割不要（短時間音声）")
-                state["chunks"] = [file_path]
-                state["chunk_durations"] = [audio_duration]
-                state["processing_log"].append(f"音声分割不要: {audio_duration:.2f}秒")
-                return state
-            
-            # 最大長チェック
-            if audio_duration > max_duration:
-                warning_msg = f"音声が最大長({max_duration}秒)を超えています: {audio_duration:.2f}秒"
-                state["warnings"].append(warning_msg)
-                logger.warning(warning_msg)
-            
-            ctx.log_progress("音声分割を開始")
-            
-            # 音声を分割
             chunks, durations = _split_audio_file(
                 file_path, 
                 chunk_size,
@@ -80,17 +75,39 @@ def split_audio_node(state: STTState) -> STTState:
             logger.info(f"音声分割完了: {len(chunks)}個のチャンク, 合計時間: {sum(durations):.2f}秒")
             
         except Exception as e:
-            error_msg = f"音声分割エラー: {str(e)}"
-            state["errors"].append(error_msg)
-            logger.error(error_msg, exc_info=True)
-            
-            # エラー時は元ファイルをそのまま使用
-            state["chunks"] = [state["file_path"]]
-            state["chunk_durations"] = [state.get("audio_duration", 0)]
+            _handle_splitting_error(state, e, logger)
     
     return state
 
 
+def _handle_short_audio(state: STTState, audio_duration: float, file_path: str, ctx: LogContext) -> STTState:
+    """短時間音声の処理（分割不要）"""
+    ctx.log_progress("分割不要（短時間音声）")
+    state["chunks"] = [file_path]
+    state["chunk_durations"] = [audio_duration]
+    state["processing_log"].append(f"音声分割不要: {audio_duration:.2f}秒")
+    return state
+
+
+def _add_max_duration_warning(state: STTState, audio_duration: float, max_duration: int, logger) -> None:
+    """最大長を超える音声の警告を追加"""
+    warning_msg = f"音声が最大長({max_duration}秒)を超えています: {audio_duration:.2f}秒"
+    state["warnings"].append(warning_msg)
+    logger.warning(warning_msg)
+
+
+def _handle_splitting_error(state: STTState, error: Exception, logger) -> None:
+    """音声分割エラーの処理"""
+    error_msg = f"音声分割エラー: {str(error)}"
+    state["errors"].append(error_msg)
+    logger.error(error_msg, exc_info=True)
+    
+    # エラー時は元ファイルをそのまま使用
+    state["chunks"] = [state["file_path"]]
+    state["chunk_durations"] = [state.get("audio_duration", 0)]
+
+
+@method_error_handler(FileProcessingError, "音声分割に失敗")
 def _split_audio_file(
     file_path: str, 
     chunk_duration: int, 
@@ -108,66 +125,70 @@ def _split_audio_file(
         
     Returns:
         (分割されたファイルパスのリスト, 各チャンクの長さのリスト)
+        
+    Raises:
+        FileNotFoundError: ファイルが存在しない場合
+        FileProcessingError: 音声分割に失敗した場合
     """
     logger = get_logger("audio_splitting")
     
-    try:
-        # 音声ファイルを読み込み
-        audio = AudioSegment.from_file(file_path)
+    # 入力ファイルの存在確認（FileNotFoundErrorを直接発生させる）
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"ファイルが見つかりません: {file_path}")
+    
+    # 音声ファイルを読み込み
+    audio = AudioSegment.from_file(file_path)
+    total_duration_ms = len(audio)
+    total_duration_s = total_duration_ms / 1000.0
+    
+    logger.info(f"音声ファイル読み込み完了: {total_duration_s:.2f}秒")
+    
+    # 開始時間を適用
+    if start_time_seconds > 0:
+        start_ms = start_time_seconds * 1000
+        audio = audio[start_ms:]
         total_duration_ms = len(audio)
         total_duration_s = total_duration_ms / 1000.0
+        logger.info(f"開始時間適用後: {total_duration_s:.2f}秒")
+    
+    # 分割数を計算
+    chunk_duration_ms = chunk_duration * 1000
+    num_chunks = math.ceil(total_duration_ms / chunk_duration_ms)
+    
+    logger.info(f"分割数: {num_chunks}個")
+    
+    # ファイルパスの準備
+    file_path_obj = Path(file_path)
+    base_name = file_path_obj.stem
+    extension = file_path_obj.suffix
+    output_dir = file_path_obj.parent
+    
+    chunk_files = []
+    chunk_durations = []
+    
+    for i in range(num_chunks):
+        # 分割範囲を計算
+        start_ms = i * chunk_duration_ms
+        end_ms = min((i + 1) * chunk_duration_ms, total_duration_ms)
         
-        logger.info(f"音声ファイル読み込み完了: {total_duration_s:.2f}秒")
+        # チャンクを抽出
+        chunk = audio[start_ms:end_ms]
+        chunk_duration_actual = len(chunk) / 1000.0
         
-        # 開始時間を適用
-        if start_time_seconds > 0:
-            start_ms = start_time_seconds * 1000
-            audio = audio[start_ms:]
-            total_duration_ms = len(audio)
-            total_duration_s = total_duration_ms / 1000.0
-            logger.info(f"開始時間適用後: {total_duration_s:.2f}秒")
+        # ファイル名を生成
+        chunk_filename = f"{base_name}_chunk_{start_file_index + i:03d}{extension}"
+        chunk_path = output_dir / chunk_filename
         
-        # 分割数を計算
-        chunk_duration_ms = chunk_duration * 1000
-        num_chunks = math.ceil(total_duration_ms / chunk_duration_ms)
+        # チャンクを保存
+        chunk.export(str(chunk_path), format=extension[1:])  # 拡張子から'.'を除去
         
-        logger.info(f"分割数: {num_chunks}個")
+        chunk_files.append(str(chunk_path))
+        chunk_durations.append(chunk_duration_actual)
         
-        # ファイルパスの準備
-        file_path_obj = Path(file_path)
-        base_name = file_path_obj.stem
-        extension = file_path_obj.suffix
-        output_dir = file_path_obj.parent
-        
-        chunk_files = []
-        chunk_durations = []
-        
-        for i in range(num_chunks):
-            # 分割範囲を計算
-            start_ms = i * chunk_duration_ms
-            end_ms = min((i + 1) * chunk_duration_ms, total_duration_ms)
-            
-            # チャンクを抽出
-            chunk = audio[start_ms:end_ms]
-            chunk_duration_actual = len(chunk) / 1000.0
-            
-            # ファイル名を生成
-            chunk_filename = f"{base_name}_chunk_{start_file_index + i:03d}{extension}"
-            chunk_path = output_dir / chunk_filename
-            
-            # チャンクを保存
-            chunk.export(str(chunk_path), format=extension[1:])  # 拡張子から'.'を除去
-            
-            chunk_files.append(str(chunk_path))
-            chunk_durations.append(chunk_duration_actual)
-            
-            logger.debug(f"チャンク {i+1}/{num_chunks} 作成: {chunk_path} ({chunk_duration_actual:.2f}秒)")
-        
-        logger.info(f"音声分割完了: {len(chunk_files)}個のファイルを作成")
-        return chunk_files, chunk_durations
-        
-    except Exception as e:
-        raise FileProcessingError(f"音声分割に失敗しました: {str(e)}", file_path)
+        logger.debug(f"チャンク {i+1}/{num_chunks} 作成: {chunk_path} ({chunk_duration_actual:.2f}秒)")
+    
+    logger.info(f"音声分割完了: {len(chunk_files)}個のファイルを作成")
+    return chunk_files, chunk_durations
 
 
 def _calculate_optimal_chunk_size(duration: float, max_chunks: int = 10) -> int:
@@ -193,6 +214,7 @@ def _calculate_optimal_chunk_size(duration: float, max_chunks: int = 10) -> int:
     return chunk_sizes[-1]
 
 
+@method_error_handler(FileProcessingError, "チャンク情報の取得に失敗")
 def get_chunk_info(chunks: List[str], durations: List[float]) -> dict:
     """
     チャンク情報のサマリーを取得
@@ -203,7 +225,11 @@ def get_chunk_info(chunks: List[str], durations: List[float]) -> dict:
         
     Returns:
         チャンク情報の辞書
+        
+    Raises:
+        FileProcessingError: チャンク情報の取得に失敗した場合
     """
+    # 入力チェック
     if not chunks or not durations:
         return {
             "total_chunks": 0,
@@ -212,6 +238,10 @@ def get_chunk_info(chunks: List[str], durations: List[float]) -> dict:
             "min_duration": 0.0,
             "max_duration": 0.0
         }
+    
+    # チャンク数と長さのリストの長さが一致しない場合
+    if len(chunks) != len(durations):
+        raise ValueError(f"チャンク数({len(chunks)})と長さリスト({len(durations)})の長さが一致しません")
     
     return {
         "total_chunks": len(chunks),
@@ -222,6 +252,7 @@ def get_chunk_info(chunks: List[str], durations: List[float]) -> dict:
     }
 
 
+@method_error_handler(FileProcessingError, "チャンクファイルのクリーンアップに失敗")
 def cleanup_chunks(chunks: List[str], keep_original: bool = True) -> None:
     """
     分割されたチャンクファイルをクリーンアップ
@@ -229,22 +260,42 @@ def cleanup_chunks(chunks: List[str], keep_original: bool = True) -> None:
     Args:
         chunks: クリーンアップするチャンクファイルのパス一覧
         keep_original: 元ファイルを保持するかどうか
+        
+    Raises:
+        FileProcessingError: クリーンアップ処理に失敗した場合
     """
     logger = get_logger("audio_splitting")
     
+    if not chunks:
+        return
+    
+    deleted_count = 0
+    failed_files = []
+    
     for chunk_path in chunks:
+        # 元ファイルかどうかをチェック
+        if keep_original and "_chunk_" not in os.path.basename(chunk_path):
+            continue
+            
+        if not os.path.exists(chunk_path):
+            continue
+            
         try:
-            if os.path.exists(chunk_path):
-                # 元ファイルかどうかをチェック
-                if keep_original and "_chunk_" not in os.path.basename(chunk_path):
-                    continue
-                
-                os.remove(chunk_path)
-                logger.debug(f"チャンクファイルを削除: {chunk_path}")
+            os.remove(chunk_path)
+            deleted_count += 1
+            logger.debug(f"チャンクファイルを削除: {chunk_path}")
         except Exception as e:
+            failed_files.append(chunk_path)
             logger.warning(f"チャンクファイルの削除に失敗: {chunk_path} - {str(e)}")
+    
+    # 削除に失敗したファイルがある場合は警告ログを出力
+    if failed_files:
+        logger.warning(f"一部のチャンクファイル({len(failed_files)}個)の削除に失敗しました")
+    else:
+        logger.info(f"チャンクファイルのクリーンアップ完了: {deleted_count}個のファイルを削除")
 
 
+@method_error_handler(FileProcessingError, "チャンク結果のマージに失敗")
 def merge_chunk_results(chunk_results: List[str], chunk_times: List[Tuple[float, float]] = None) -> str:
     """
     チャンクの処理結果をマージ（既存コードとの互換性のため）
@@ -255,9 +306,18 @@ def merge_chunk_results(chunk_results: List[str], chunk_times: List[Tuple[float,
         
     Returns:
         マージされた結果
+        
+    Raises:
+        FileProcessingError: チャンク結果のマージに失敗した場合
     """
+    # 入力チェック
     if not chunk_results:
         return ""
+    
+    # チャンク時間情報の検証
+    if chunk_times and len(chunk_times) < len(chunk_results):
+        logger = get_logger("audio_splitting")
+        logger.warning(f"チャンク時間情報({len(chunk_times)}個)がチャンク結果({len(chunk_results)}個)より少ないです")
     
     merged_result = []
     

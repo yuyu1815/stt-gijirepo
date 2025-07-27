@@ -10,19 +10,18 @@ import sys
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import List, Optional
 
 # プロジェクトルートをパスに追加
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.workflows.stt_workflow import execute_stt_workflow, execute_batch_processing, validate_workflow_config
-from src.workflows.state import create_default_config
-from src.utils import setup_logging, get_logger
-from src.utils.class_info import get_class_info
+from src.workflows.state import create_default_config, STTConfig, STTState
+from src.utils import setup_logging
 
 
-def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+def load_config(config_path: Optional[str] = None) -> STTConfig:
     """
     設定ファイルを読み込み
     
@@ -42,7 +41,9 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
                 file_config = json.load(f)
                 config.update(file_config)
         except Exception as e:
-            print(f"設定ファイルの読み込みエラー: {e}")
+            error_msg = f"設定ファイル({config_path})の読み込みに失敗しました: {e}"
+            print(f"エラー: {error_msg}")
+            raise ValueError(error_msg)
     
     # 環境変数から読み込み
     env_mappings = {
@@ -95,7 +96,7 @@ def find_media_files(path: str) -> List[str]:
         return []
 
 
-def print_result_summary(result: Dict[str, Any]) -> None:
+def print_result_summary(result: STTState) -> None:
     """
     処理結果のサマリーを表示
     
@@ -158,7 +159,7 @@ def print_result_summary(result: Dict[str, Any]) -> None:
     print("="*60)
 
 
-def save_results(result: Dict[str, Any], output_dir: str) -> None:
+def save_results(result: STTState, output_dir: str) -> None:
     """
     処理結果をファイルに保存
     

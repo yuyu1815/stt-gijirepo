@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils.logging_config import setup_logging
 from src.utils.error_handling import STTError
+from src.utils.retry_utils import method_error_handler
 from src.workflows.state import create_default_config
 
 
@@ -46,6 +47,7 @@ class LegacyMigrator:
             "warnings": 0
         }
         
+    @method_error_handler(STTError, "移行処理に失敗")
     def migrate_all(self) -> Dict[str, Any]:
         """
         完全な移行プロセスを実行
@@ -55,43 +57,33 @@ class LegacyMigrator:
         """
         self.logger.info("レガシーシステムの移行を開始します")
         
-        try:
-            # 1. 環境検証
-            self._validate_environment()
-            
-            # 2. 設定ファイルの移行
-            self._migrate_configuration()
-            
-            # 3. プロンプトファイルの移行
-            self._migrate_prompts()
-            
-            # 4. 処理済みファイルの移行
-            self._migrate_processed_files()
-            
-            # 5. ログファイルの移行
-            self._migrate_logs()
-            
-            # 6. 設定の更新
-            self._update_configurations()
-            
-            # 7. 移行後の検証
-            self._validate_migration()
-            
-            self.logger.info("移行が正常に完了しました")
-            return {
-                "status": "success",
-                "stats": self.migration_stats,
-                "message": "移行が正常に完了しました"
-            }
-            
-        except Exception as e:
-            self.logger.error(f"移行中にエラーが発生しました: {e}")
-            self.migration_stats["errors"] += 1
-            return {
-                "status": "error",
-                "stats": self.migration_stats,
-                "error": str(e)
-            }
+        # 1. 環境検証
+        self._validate_environment()
+        
+        # 2. 設定ファイルの移行
+        self._migrate_configuration()
+        
+        # 3. プロンプトファイルの移行
+        self._migrate_prompts()
+        
+        # 4. 処理済みファイルの移行
+        self._migrate_processed_files()
+        
+        # 5. ログファイルの移行
+        self._migrate_logs()
+        
+        # 6. 設定の更新
+        self._update_configurations()
+        
+        # 7. 移行後の検証
+        self._validate_migration()
+        
+        self.logger.info("移行が正常に完了しました")
+        return {
+            "status": "success",
+            "stats": self.migration_stats,
+            "message": "移行が正常に完了しました"
+        }
     
     def _validate_environment(self):
         """環境の検証"""
@@ -121,36 +113,40 @@ class LegacyMigrator:
         
         self.logger.info("環境検証が完了しました")
     
+    @method_error_handler(STTError, "設定ファイルの移行に失敗")
     def _migrate_configuration(self):
         """設定ファイルの移行"""
         self.logger.info("設定ファイルを移行しています...")
         
         # 既存のsettings.jsonを探す
         legacy_settings = self.legacy_dir / "settings.json"
-        if legacy_settings.exists():
-            try:
-                with open(legacy_settings, 'r', encoding='utf-8') as f:
-                    legacy_config = json.load(f)
-                
-                # 新しい設定形式に変換
-                new_config = self._convert_legacy_config(legacy_config)
-                
-                # 新しい設定ファイルとして保存
-                target_settings = self.target_dir / "settings.json"
-                with open(target_settings, 'w', encoding='utf-8') as f:
-                    json.dump(new_config, f, indent=2, ensure_ascii=False)
-                
-                self.migration_stats["files_migrated"] += 1
-                self.logger.info("設定ファイルの移行が完了しました")
-                
-            except Exception as e:
-                self.logger.warning(f"設定ファイルの移行に失敗しました: {e}")
-                self.migration_stats["warnings"] += 1
-                
-                # デフォルト設定を作成
-                self._create_default_config()
-        else:
+        if not legacy_settings.exists():
             self.logger.info("既存の設定ファイルが見つかりません。デフォルト設定を作成します")
+            self._create_default_config()
+            self.migration_stats["files_processed"] += 1
+            return
+            
+        # 設定ファイルの読み込みと変換
+        try:
+            with open(legacy_settings, 'r', encoding='utf-8') as f:
+                legacy_config = json.load(f)
+            
+            # 新しい設定形式に変換
+            new_config = self._convert_legacy_config(legacy_config)
+            
+            # 新しい設定ファイルとして保存
+            target_settings = self.target_dir / "settings.json"
+            with open(target_settings, 'w', encoding='utf-8') as f:
+                json.dump(new_config, f, indent=2, ensure_ascii=False)
+            
+            self.migration_stats["files_migrated"] += 1
+            self.logger.info("設定ファイルの移行が完了しました")
+            
+        except Exception as e:
+            self.logger.warning(f"設定ファイルの移行に失敗しました: {e}")
+            self.migration_stats["warnings"] += 1
+            
+            # デフォルト設定を作成
             self._create_default_config()
         
         self.migration_stats["files_processed"] += 1
@@ -496,6 +492,7 @@ INCLUDE_TIMESTAMPS=true
         self.logger.info("移行検証が完了しました")
 
 
+@method_error_handler(STTError, "移行メイン関数に失敗", passthrough_exceptions=[KeyboardInterrupt])
 def main():
     """メイン実行関数"""
     parser = argparse.ArgumentParser(
@@ -527,27 +524,22 @@ def main():
     setup_logging(level=args.log_level)
     logger = logging.getLogger(__name__)
     
-    try:
-        if args.dry_run:
-            logger.info("ドライランモード: 実際の移行は行いません")
-            # TODO: ドライラン機能の実装
-            return
-        
-        # 移行実行
-        migrator = LegacyMigrator(args.legacy_dir, args.target_dir)
-        result = migrator.migrate_all()
-        
-        if result["status"] == "success":
-            logger.info("移行が正常に完了しました")
-            print(f"移行統計: {result['stats']}")
-            return 0
-        else:
-            logger.error(f"移行に失敗しました: {result.get('error', 'Unknown error')}")
-            print(f"移行統計: {result['stats']}")
-            return 1
-            
-    except Exception as e:
-        logger.error(f"予期しないエラーが発生しました: {e}")
+    if args.dry_run:
+        logger.info("ドライランモード: 実際の移行は行いません")
+        # TODO: ドライラン機能の実装
+        return 0
+    
+    # 移行実行
+    migrator = LegacyMigrator(args.legacy_dir, args.target_dir)
+    result = migrator.migrate_all()
+    
+    if result["status"] == "success":
+        logger.info("移行が正常に完了しました")
+        print(f"移行統計: {result['stats']}")
+        return 0
+    else:
+        logger.error(f"移行に失敗しました: {result.get('error', 'Unknown error')}")
+        print(f"移行統計: {result['stats']}")
         return 1
 
 

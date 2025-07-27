@@ -11,6 +11,7 @@ from datetime import datetime
 from src.workflows.state import STTState
 from src.utils import get_logger, APIError, api_call_with_retry
 from src.utils.logging_config import log_state_transition, LogContext
+from src.utils.retry_utils import method_error_handler
 
 # Gemini APIのインポートを試行
 try:
@@ -38,23 +39,21 @@ def generate_minutes_node(state: STTState) -> STTState:
     logger = get_logger("minutes_generation")
     
     with LogContext(logger, "議事録生成", state["session_id"]) as ctx:
+        # 状態遷移をログ
+        log_state_transition(logger, state["processing_stage"], "minutes_generation", state["session_id"])
+        state["processing_stage"] = "minutes_generation"
+        
+        transcription = state.get("transcription", "")
+        
+        # 文字起こし結果が空の場合は早期リターン
+        if not transcription:
+            _handle_empty_transcription(state, logger)
+            return state
+        
+        ctx.log_progress(f"議事録生成開始: {len(transcription)}文字の文字起こしから生成")
+        
         try:
-            # 状態遷移をログ
-            log_state_transition(logger, state["processing_stage"], "minutes_generation", state["session_id"])
-            state["processing_stage"] = "minutes_generation"
-            
-            transcription = state.get("transcription", "")
-            
-            if not transcription:
-                warning_msg = "文字起こし結果が空のため議事録生成をスキップします"
-                state["warnings"].append(warning_msg)
-                logger.warning(warning_msg)
-                state["minutes"] = ""
-                state["summary"] = ""
-                return state
-            
-            ctx.log_progress(f"議事録生成開始: {len(transcription)}文字の文字起こしから生成")
-            
+            # 議事録とサマリーの生成
             if not HAS_GEMINI:
                 # Gemini APIが利用できない場合は基本的な整形のみ
                 ctx.log_progress("Gemini APIが利用できないため基本整形のみ実行")
@@ -81,21 +80,34 @@ def generate_minutes_node(state: STTState) -> STTState:
             logger.info(f"議事録生成完了: 議事録 {len(minutes)}文字, サマリー {len(summary)}文字")
             
         except Exception as e:
-            error_msg = f"議事録生成エラー: {str(e)}"
-            state["errors"].append(error_msg)
-            logger.error(error_msg, exc_info=True)
-            
-            # エラー時は基本整形を試行
-            try:
-                state["minutes"] = _generate_basic_minutes(state.get("transcription", ""), state)
-                state["summary"] = _generate_basic_summary(state.get("transcription", ""))
-            except Exception:
-                state["minutes"] = ""
-                state["summary"] = ""
+            _handle_minutes_generation_error(state, e, logger)
     
     return state
 
+def _handle_empty_transcription(state: STTState, logger) -> None:
+    """空の文字起こし結果を処理するヘルパー関数"""
+    warning_msg = "文字起こし結果が空のため議事録生成をスキップします"
+    state["warnings"].append(warning_msg)
+    logger.warning(warning_msg)
+    state["minutes"] = ""
+    state["summary"] = ""
 
+def _handle_minutes_generation_error(state: STTState, error: Exception, logger) -> None:
+    """議事録生成エラーを処理するヘルパー関数"""
+    error_msg = f"議事録生成エラー: {str(error)}"
+    state["errors"].append(error_msg)
+    logger.error(error_msg, exc_info=True)
+    
+    # エラー時は基本整形を試行
+    try:
+        state["minutes"] = _generate_basic_minutes(state.get("transcription", ""), state)
+        state["summary"] = _generate_basic_summary(state.get("transcription", ""))
+    except Exception:
+        state["minutes"] = ""
+        state["summary"] = ""
+
+
+@method_error_handler(APIError, "AI議事録生成に失敗しました")
 def _generate_ai_minutes(transcription: str, state: STTState) -> str:
     """
     AI を使用した議事録生成
@@ -109,48 +121,44 @@ def _generate_ai_minutes(transcription: str, state: STTState) -> str:
     """
     logger = get_logger("minutes_generation")
     
-    try:
-        # API設定
-        settings = state["settings"]
-        api_key = settings.get("gemini_api_key")
-        if not api_key:
-            raise APIError("Gemini APIキーが設定されていません", "gemini")
-        
-        import os
-        os.environ['GOOGLE_API_KEY'] = api_key
-        client = genai.Client()
-        model_name = settings.get("gemini_model", "gemini-1.5-pro")
-        
-        # 議事録生成プロンプトを構築
-        prompt = _build_minutes_prompt(transcription, state)
-        
-        # AI による議事録生成実行
-        def _generate_content():
-            return client.models.generate_content(
-                model=model_name,
-                contents=prompt
-            )
-        
-        response = api_call_with_retry(
-            _generate_content,
-            max_retries=3,
-            logger=logger
-        )
-        
-        minutes = response.text.strip()
-        
-        # 後処理
-        minutes = _post_process_minutes(minutes, state)
-        
-        logger.info(f"AI議事録生成完了: {len(minutes)}文字")
-        return minutes
-        
-    except Exception as e:
-        logger.error(f"AI議事録生成エラー: {str(e)}")
-        # エラー時は基本整形にフォールバック
+    # API設定
+    settings = state["settings"]
+    api_key = settings.get("gemini_api_key")
+    if not api_key:
+        logger.warning("Gemini APIキーが設定されていないため基本整形にフォールバック")
         return _generate_basic_minutes(transcription, state)
+    
+    import os
+    os.environ['GOOGLE_API_KEY'] = api_key
+    client = genai.Client()
+    model_name = settings.get("gemini_model")
+    
+    # 議事録生成プロンプトを構築
+    prompt = _build_minutes_prompt(transcription, state)
+    
+    # AI による議事録生成実行
+    def _generate_content():
+        return client.models.generate_content(
+            model=model_name,
+            contents=prompt
+        )
+    
+    response = api_call_with_retry(
+        _generate_content,
+        max_retries=settings.get("max_retries", 5),
+        logger=logger
+    )
+    
+    minutes = response.text.strip()
+    
+    # 後処理
+    minutes = _post_process_minutes(minutes, state)
+    
+    logger.info(f"AI議事録生成完了: {len(minutes)}文字")
+    return minutes
 
 
+@method_error_handler(APIError, "AIサマリー生成に失敗しました")
 def _generate_ai_summary(transcription: str, state: STTState) -> str:
     """
     AI を使用したサマリー生成
@@ -161,46 +169,44 @@ def _generate_ai_summary(transcription: str, state: STTState) -> str:
         
     Returns:
         生成されたサマリー
+        
+    Raises:
+        APIError: AI API呼び出しに失敗した場合
     """
     logger = get_logger("minutes_generation")
     
-    try:
-        # API設定
-        settings = state["settings"]
-        api_key = settings.get("gemini_api_key")
-        if not api_key:
-            return _generate_basic_summary(transcription)
-        
-        import os
-        os.environ['GOOGLE_API_KEY'] = api_key
-        client = genai.Client()
-        model_name = settings.get("gemini_model", "gemini-1.5-pro")
-        
-        # サマリー生成プロンプト
-        prompt = _build_summary_prompt(transcription, state)
-        
-        # AI によるサマリー生成実行
-        def _generate_content():
-            return client.models.generate_content(
-                model=model_name,
-                contents=prompt
-            )
-        
-        response = api_call_with_retry(
-            _generate_content,
-            max_retries=3,
-            logger=logger
-        )
-        
-        summary = response.text.strip()
-        
-        logger.info(f"AIサマリー生成完了: {len(summary)}文字")
-        return summary
-        
-    except Exception as e:
-        logger.error(f"AIサマリー生成エラー: {str(e)}")
-        # エラー時は基本サマリーにフォールバック
+    # API設定
+    settings = state["settings"]
+    api_key = settings.get("gemini_api_key")
+    if not api_key:
+        logger.warning("Gemini APIキーが設定されていないため基本サマリーにフォールバック")
         return _generate_basic_summary(transcription)
+    
+    import os
+    os.environ['GOOGLE_API_KEY'] = api_key
+    client = genai.Client()
+    model_name = settings.get("gemini_model")
+    
+    # サマリー生成プロンプト
+    prompt = _build_summary_prompt(transcription, state)
+    
+    # AI によるサマリー生成実行
+    def _generate_content():
+        return client.models.generate_content(
+            model=model_name,
+            contents=prompt
+        )
+    
+    response = api_call_with_retry(
+        _generate_content,
+        max_retries=settings.get("max_retries", 5),
+        logger=logger
+    )
+    
+    summary = response.text.strip()
+    
+    logger.info(f"AIサマリー生成完了: {len(summary)}文字")
+    return summary
 
 
 def _generate_basic_minutes(transcription: str, state: STTState) -> str:
@@ -295,7 +301,7 @@ def _build_minutes_prompt(transcription: str, state: STTState) -> str:
     datetime_str = class_info.get("datetime", "不明")
     
     # 基本プロンプトを読み込み
-    base_prompt = _load_minutes_prompt()
+    base_prompt = _load_minutes_prompt(state)
     
     # プロンプトに情報を埋め込み
     prompt = base_prompt.format(
@@ -333,10 +339,13 @@ def _build_summary_prompt(transcription: str, state: STTState) -> str:
     return prompt
 
 
-def _load_minutes_prompt() -> str:
+def _load_minutes_prompt(state: STTState = None) -> str:
     """
     議事録生成用プロンプトを読み込み
     
+    Args:
+        state: 処理状態（設定情報を取得するため）
+        
     Returns:
         プロンプト文字列
     """
@@ -365,9 +374,14 @@ def _load_minutes_prompt() -> str:
 上記の要求事項に従って、読みやすく整理された議事録を作成してください。"""
     
     try:
+        # 設定タイプを取得（"会議" または "授業"）
+        setting_type = None
+        if state and "settings" in state:
+            setting_type = state["settings"].get("prompt_type")
+            
         # プロンプトファイルから読み込みを試行
         from src.prompts.minutes_generation import get_minutes_prompt
-        return get_minutes_prompt()
+        return get_minutes_prompt(setting_type=setting_type)
     except ImportError:
         # プロンプトモジュールが未実装の場合はデフォルトを使用
         return default_prompt
@@ -380,7 +394,16 @@ def _load_summary_prompt() -> str:
     Returns:
         プロンプト文字列
     """
-    default_prompt = """以下の文字起こし結果から、簡潔なサマリーを作成してください。
+    try:
+        # プロンプトローダーを使用してプロンプトを読み込み
+        from src.utils.prompt_loader import load_and_render_prompt
+        return load_and_render_prompt(
+            category="minutes",
+            prompt_name="generation_summary"
+        )
+    except ImportError:
+        # プロンプトローダーが利用できない場合のフォールバック
+        default_prompt = """以下の文字起こし結果から、簡潔なサマリーを作成してください。
 
 授業名: {class_name}
 
@@ -394,13 +417,27 @@ def _load_summary_prompt() -> str:
 {transcription}
 
 上記の内容を簡潔にまとめてください。"""
-    
-    try:
-        # プロンプトファイルから読み込みを試行
-        from src.prompts.minutes_generation import get_summary_prompt
-        return get_summary_prompt()
-    except ImportError:
-        # プロンプトモジュールが未実装の場合はデフォルトを使用
+        return default_prompt
+        
+    except Exception as e:
+        # その他のエラーが発生した場合もデフォルトを使用
+        logger = get_logger("minutes_generation")
+        logger.warning(f"サマリープロンプト読み込みエラー: {str(e)}")
+        
+        default_prompt = """以下の文字起こし結果から、簡潔なサマリーを作成してください。
+
+授業名: {class_name}
+
+要求事項:
+1. 3-5行程度の簡潔なサマリーにしてください
+2. 主要なトピックと重要なポイントを含めてください
+3. 専門用語は適切に説明してください
+4. 読みやすい日本語で記述してください
+
+文字起こし結果:
+{transcription}
+
+上記の内容を簡潔にまとめてください。"""
         return default_prompt
 
 
@@ -451,7 +488,7 @@ def _post_process_minutes(minutes: str, state: STTState) -> str:
         後処理された議事録
     """
     # タイムスタンプの追加（設定で有効な場合）
-    if state["settings"].get("include_timestamps", True):
+    if state["settings"].get("include_timestamps"):
         timestamp = datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
         minutes = f"{minutes}\n\n---\n*生成日時: {timestamp}*"
     

@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.utils.logging_config import setup_logging
 from src.utils.performance_monitor import PerformanceMonitor
+from src.utils.retry_utils import method_error_handler
+from src.utils.error_handling import STTError
 from src.workflows.stt_workflow import execute_stt_workflow
 from src.workflows.state import create_default_config
 from src.core.audio_processing import AudioProcessor
@@ -63,6 +65,7 @@ class PerformanceBenchmark:
         # テスト用音声ファイル
         self.test_files = []
         
+    @method_error_handler(STTError, "ベンチマーク実行に失敗")
     def run_all_benchmarks(self) -> Dict[str, Any]:
         """
         全てのベンチマークテストを実行
@@ -99,12 +102,6 @@ class PerformanceBenchmark:
             
             self.logger.info("ベンチマークが完了しました")
             return self.benchmark_results
-            
-        except Exception as e:
-            self.logger.error(f"ベンチマーク中にエラーが発生しました: {e}")
-            self.benchmark_results["error"] = str(e)
-            return self.benchmark_results
-        
         finally:
             # テスト用ファイルのクリーンアップ
             self._cleanup_test_files()
@@ -146,13 +143,16 @@ class PerformanceBenchmark:
         
         self.logger.info(f"{len(self.test_files)}個のテストファイルを準備しました")
     
+    @method_error_handler(STTError, "テストファイルのクリーンアップに失敗")
     def _cleanup_test_files(self):
         """テスト用ファイルのクリーンアップ"""
         for test_file in self.test_files:
-            try:
-                os.unlink(test_file["path"])
-            except Exception as e:
-                self.logger.warning(f"テストファイルの削除に失敗: {e}")
+            file_path = test_file["path"]
+            if os.path.exists(file_path):
+                try:
+                    os.unlink(file_path)
+                except Exception as e:
+                    self.logger.warning(f"テストファイルの削除に失敗: {file_path} - {e}")
     
     def _benchmark_audio_processing(self):
         """音声処理のベンチマーク"""
@@ -562,6 +562,7 @@ class PerformanceBenchmark:
         print("="*60)
 
 
+@method_error_handler(STTError, "ベンチマークメイン関数に失敗", passthrough_exceptions=[KeyboardInterrupt])
 def main():
     """メイン実行関数"""
     parser = argparse.ArgumentParser(
@@ -593,28 +594,24 @@ def main():
     setup_logging(level=args.log_level)
     logger = logging.getLogger(__name__)
     
-    try:
-        benchmark = PerformanceBenchmark(
-            config_path=args.config,
-            output_file=args.output
-        )
-        
-        if args.quick:
-            logger.info("クイックベンチマークモードで実行します")
-            # クイックモードの実装（必要に応じて）
-        
-        results = benchmark.run_all_benchmarks()
-        
-        if "error" in results:
-            logger.error("ベンチマークが失敗しました")
-            return 1
-        else:
-            logger.info("ベンチマークが正常に完了しました")
-            return 0
-            
-    except Exception as e:
-        logger.error(f"予期しないエラーが発生しました: {e}")
+    # ベンチマーク実行
+    benchmark = PerformanceBenchmark(
+        config_path=args.config,
+        output_file=args.output
+    )
+    
+    if args.quick:
+        logger.info("クイックベンチマークモードで実行します")
+        # クイックモードの実装（必要に応じて）
+    
+    results = benchmark.run_all_benchmarks()
+    
+    if "error" in results:
+        logger.error("ベンチマークが失敗しました")
         return 1
+    else:
+        logger.info("ベンチマークが正常に完了しました")
+        return 0
 
 
 if __name__ == "__main__":

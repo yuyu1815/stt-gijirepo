@@ -55,6 +55,7 @@ class STTState(TypedDict):
     warnings: List[str]
     processing_log: List[str]
     performance_metrics: Dict[str, float]
+    rate_limit_info: Optional[Dict[str, Any]]  # APIレート制限情報
     
     # 設定・フラグ
     upload_to_notion: bool
@@ -151,6 +152,7 @@ def create_initial_state(
         warnings=[],
         processing_log=["ワークフロー初期化完了"],
         performance_metrics={},
+        rate_limit_info=None,
         
         # 設定・フラグ
         upload_to_notion=upload_to_notion,
@@ -166,31 +168,40 @@ def create_initial_state(
 
 def create_default_config() -> STTConfig:
     """デフォルト設定を作成する関数"""
-    import os
+    import json
+    from pathlib import Path
+
+    
+    # settings.jsonからの読み込みを試みる
+    settings_file = Path("settings.json")
+    with open(settings_file, 'r', encoding='utf-8') as f:
+        settings = json.load(f)
+
+
     
     return STTConfig(
         # API設定
-        gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
-        gemini_model="gemini-1.5-pro",
-        notion_token=os.getenv("NOTION_TOKEN"),
+        gemini_api_key=settings["gemini_api_key"],
+        gemini_model=settings["gemini_model"],
+        notion_token=settings["notion_token"],
         
         # 処理設定
-        max_audio_duration=2400,  # 40分
-        chunk_size=600,  # 10分
-        max_retries=5,
-        retry_delay=2.0,
+        max_audio_duration=settings["max_audio_duration"],
+        chunk_size=settings["chunk_size"],
+        max_retries=settings["max_retries"],
+        retry_delay=settings["retry_delay"],
         
         # 品質設定
-        min_confidence_threshold=0.7,
-        enable_quality_check=True,
-        enable_hallucination_check=True,
+        min_confidence_threshold=settings["min_confidence_threshold"],
+        enable_quality_check=settings["enable_quality_check"],
+        enable_hallucination_check=settings["enable_hallucination_check"],
         
         # 出力設定
-        output_format="markdown",
-        include_timestamps=True,
-        include_speaker_labels=False,
-        
+        output_format=settings["output_format"],
+        include_timestamps=settings["include_timestamps"],
+        include_speaker_labels=settings["include_speaker_labels"],
+
         # Notion設定
-        notion_database_id=os.getenv("NOTION_DATABASE_ID"),
+        notion_database_id=settings["notion_database_id"],
         notion_template_id=None
     )

@@ -174,8 +174,8 @@ def _ai_refine_minutes(gemini_service: GeminiService, combined_minutes: str, sta
         # 精製プロンプトを作成
         prompt = _create_refinement_prompt(combined_minutes, state)
         
-        # AIによる精製
-        refined_text = gemini_service.generate_minutes_from_text(prompt)
+        # AIによる精製（議事録生成タスクとして実行）
+        refined_text = gemini_service.generate_minutes_from_text(prompt, task="minutes_generation")
         
         if not refined_text or refined_text.strip() == "":
             logger.warning("AI精製処理で空の結果が返されました")
